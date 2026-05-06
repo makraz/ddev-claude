@@ -1,0 +1,35 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '15 6 * * 1'  # weekly Monday 06:15 UTC — catches upstream drift
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: addon-test
+    runs-on: ubuntu-22.04
+    env:
+      DDEV_NONINTERACTIVE: 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install DDEV
+        run: |
+          curl -fsSL https://ddev.com/install.sh | bash
+          ddev version
+
+      - name: Install bats
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bats
+
+      - name: Run tests
+        run: bats tests/test.bats

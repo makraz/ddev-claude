@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+#ddev-generated
+## Description: Run Claude Code inside the sandboxed sidecar container (YOLO mode)
+## Usage: claude [extra args passed through]
+## Example: ddev claude
+## Example: ddev claude --help
+## Example: CLAUDE_SAFE=1 ddev claude                  # disable YOLO for this run
+## Example: EXTRA_ALLOWED_DOMAINS="sentry.io" ddev claude
+##
+## This command:
+##   1. Activates the iptables/ipset/dnsmasq firewall inside the
+##      ddev-${DDEV_SITENAME}-claude sidecar container
+##   2. Drops you into an interactive Claude Code session as the
+##      non-root `claude` user, with --dangerously-skip-permissions
+##      (aka YOLO mode) enabled by default — safe here because the
+##      firewall + container isolation contain the blast radius
+##   3. Passes any extra arguments through to the claude CLI
+##
+## To opt out of YOLO for a single run, set CLAUDE_SAFE=1:
+##      CLAUDE_SAFE=1 ddev claude
+##
+## The firewall is NOT reset on exit — it persists for the lifetime of
+## the sidecar container. `ddev restart` or `ddev poweroff` clears it.
+
+set -euo pipefail
+
+CONTAINER="ddev-${DDEV_SITENAME}-claude"
+
+# Verify the sidecar is running (docker is available on host via ddev).
+if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
+    echo "error: sidecar container '$CONTAINER' is not running" >&2
+    echo "hint: run 'ddev start' to bring it up" >&2
+    exit 1
+fi
+
+# 1. Activate the firewall (idempotent; re-running is cheap)
+docker exec "$CONTAINER" sudo /usr/local/bin/init-firewall.sh
+
+# 2. Build the claude CLI argument list.
+#    YOLO mode (--dangerously-skip-permissions) is on by default; the
+#    firewall + isolated container contain anything the agent might do.
+#    Set CLAUDE_SAFE=1 to disable it for a single invocation.
+CLAUDE_ARGS=()
+if [[ "${CLAUDE_SAFE:-0}" != "1" ]]; then
+    CLAUDE_ARGS+=(--dangerously-skip-permissions)
+fi
+
+# 3. Interactive Claude Code session as the non-root user.
+#    GITHUB_PERSONAL_ACCESS_TOKEN and GH_TOKEN are forwarded into the
+#    sidecar by docker-compose.claude.yaml — export them in your host
+#    shell before `ddev start` if you need gh / GitHub MCP auth.
+exec docker exec -it \
+    --user claude \
+    --workdir /var/www/html \
+    "$CONTAINER" \
+    claude "${CLAUDE_ARGS[@]}" "$@"

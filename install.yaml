@@ -1,0 +1,72 @@
+# ddev-generated
+#
+# Install manifest for ddev-claude.
+# Read by `ddev add-on get` to:
+#   - copy files into the target project's .ddev/
+#   - run pre/post install actions
+#   - clean up on `ddev add-on remove`
+#
+# Spec: https://ddev.readthedocs.io/en/stable/users/extend/additional-services/
+
+name: claude
+
+# Require at least ddev v1.24 (when add-on system stabilised)
+ddev_version_constraint: '>= v1.24.0'
+
+pre_install_actions:
+  - |
+    #ddev-description:Sandboxed Claude Code CLI with outbound firewall and YOLO mode
+  - |
+    echo "Installing ddev-claude..."
+    echo "Architecture: $(uname -m)"
+
+project_files:
+  # Docker-compose fragment that adds the `claude` sidecar service
+  - docker-compose.claude.yaml
+
+  # Sidecar build context: Dockerfile + firewall init script
+  - claude/Dockerfile
+  - claude/init-firewall.sh
+
+  # Host command: `ddev claude`
+  - commands/host/claude
+
+global_files: []
+
+post_install_actions:
+  - |
+    cat <<'BANNER'
+
+    ──────────────────────────────────────────────────────────────────
+     ddev-claude installed.
+
+     Next steps:
+       1. export ANTHROPIC_API_KEY=sk-ant-...   (or use OAuth login)
+       2. ddev restart                           (builds the sidecar; ~5 min first time)
+       3. ddev claude                            (launches YOLO-mode Claude Code)
+
+     Network allow-list:
+       github.com, api.github.com, anthropic.com, claude.ai,
+       registry.npmjs.org, packagist.org, repo.packagist.org,
+       storage.googleapis.com
+
+     Add more domains via EXTRA_ALLOWED_DOMAINS in your shell:
+       export EXTRA_ALLOWED_DOMAINS="sentry.io api.stripe.com"
+       ddev restart
+
+     To opt out of YOLO mode for a single run:
+       CLAUDE_SAFE=1 ddev claude
+
+     To uninstall:
+       ddev add-on remove claude
+    ──────────────────────────────────────────────────────────────────
+    BANNER
+
+removal_actions:
+  - |
+    echo "ddev-claude removed from project."
+    echo "Note: docker volumes 'claude-config' and 'claude-history' are preserved."
+    echo "      Run 'docker volume rm ddev-${DDEV_PROJECT}_claude-config ddev-${DDEV_PROJECT}_claude-history'"
+    echo "      to fully wipe Claude Code auth state."
+
+yaml_read_files: {}

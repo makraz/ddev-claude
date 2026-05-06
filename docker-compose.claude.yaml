@@ -1,0 +1,48 @@
+#ddev-generated
+# ---------------------------------------------------------------------------
+# ddev-claude — sidecar service definition.
+#
+# Adds a `claude` container alongside the standard ddev `web` service.
+# The container starts with `sleep infinity`; the actual Claude Code
+# session is launched on demand by `ddev claude`.
+# ---------------------------------------------------------------------------
+services:
+    claude:
+        build:
+            context: ./claude
+        container_name: ddev-${DDEV_SITENAME}-claude
+        working_dir: /var/www/html
+        volumes:
+            - ../:/var/www/html
+            # Persist Claude Code auth + settings across container rebuilds
+            - claude-config:/home/claude/.claude
+            - claude-history:/home/claude/.bash_history.d
+        environment:
+            - ANTHROPIC_API_KEY
+            - PLAYWRIGHT_BASE_URL=https://web
+            - CLAUDE_CONFIG_DIR=/home/claude/.claude
+            # GitHub auth — a single host-side token powers both the GitHub
+            # MCP (reads GITHUB_PERSONAL_ACCESS_TOKEN) and the gh CLI
+            # (reads GH_TOKEN). Falls back to empty if unset on the host.
+            - GITHUB_PERSONAL_ACCESS_TOKEN
+            - GH_TOKEN=${GITHUB_PERSONAL_ACCESS_TOKEN:-}
+            # Extra domains to allow through the firewall (space-separated).
+            # Pick these up from the host shell when you run `ddev start`.
+            - EXTRA_ALLOWED_DOMAINS
+        # NET_ADMIN + NET_RAW let iptables/ipset install packet-filter
+        # rules. Without these the firewall init script aborts.
+        cap_add:
+            - NET_ADMIN
+            - NET_RAW
+        labels:
+            com.ddev.site-name: ${DDEV_SITENAME}
+            com.ddev.approot: $DDEV_APPROOT
+        depends_on:
+            - web
+        networks:
+            - default
+        entrypoint: sleep infinity
+
+volumes:
+    claude-config:
+    claude-history:
