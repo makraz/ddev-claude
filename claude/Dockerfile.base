@@ -47,7 +47,7 @@ COPY init-firewall.sh /usr/local/bin/init-firewall.sh
 RUN chmod 0755 /usr/local/bin/init-firewall.sh
 
 # ---- EXTRAS INJECTION POINT ----
-# build-image.sh replaces the line `# {{EXTRAS}}` below with the concatenated
+# build-image.sh replaces the marker line below with the concatenated
 # contents of every selected claude/extras/<name>.fragment, followed by
 # .ddev/claude.local/Dockerfile.fragment if it exists. Fragments execute as
 # root (the current USER context here). If a fragment switches USER, it must
