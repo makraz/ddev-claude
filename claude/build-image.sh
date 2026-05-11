@@ -67,7 +67,7 @@ parse_claude_yaml() {
       case "$current_key" in
         extras)        EXTRAS+=("$val") ;;
         extra_domains) EXTRA_DOMAINS_LIST+=("$val") ;;
-        *) die "list item without parent key at line $line_no" ;;
+        *) die "list item without parent key in $file at line $line_no" ;;
       esac
       continue
     fi
@@ -98,10 +98,6 @@ validate_extras() {
 main() {
   parse_claude_yaml "$CONFIG_FILE"
   validate_extras
-  # Generation is implemented in Task 4. For Task 3 we exit successfully so
-  # the parser-only tests pass; later tasks extend this.
-  : > "$OUT_DOCKERFILE"
-  : > "$OUT_DOMAINS"
   generate_dockerfile
   generate_domains_list
 }
