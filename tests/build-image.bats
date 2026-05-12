@@ -93,3 +93,110 @@ YAML
   run grep -Fx 'api.stripe.com' "$PROJ/.ddev/claude/extra-domains.list"
   [ "$status" -eq 0 ]
 }
+
+@test ".requires: dependent extras pulled in transitively" {
+  # Add two fixture extras: alpha (no deps), beta (.requires alpha).
+  cat > "$PROJ/.ddev/claude/extras/alpha.fragment" <<'F'
+USER root
+RUN echo alpha-marker > /tmp/alpha-marker
+F
+  : > "$PROJ/.ddev/claude/extras/alpha.domains"
+  cat > "$PROJ/.ddev/claude/extras/beta.fragment" <<'F'
+USER root
+RUN echo beta-marker > /tmp/beta-marker
+F
+  : > "$PROJ/.ddev/claude/extras/beta.domains"
+  echo "alpha" > "$PROJ/.ddev/claude/extras/beta.requires"
+
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+extras:
+  - beta
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  # Both markers should appear, with alpha BEFORE beta in the Dockerfile.
+  run grep -n alpha-marker "$PROJ/.ddev/claude/Dockerfile"
+  [ "$status" -eq 0 ]
+  alpha_line="${output%%:*}"
+  run grep -n beta-marker "$PROJ/.ddev/claude/Dockerfile"
+  [ "$status" -eq 0 ]
+  beta_line="${output%%:*}"
+  [ "$alpha_line" -lt "$beta_line" ]
+}
+
+@test ".requires: cycle detected and reported" {
+  cat > "$PROJ/.ddev/claude/extras/loop1.fragment" <<'F'
+USER root
+F
+  cat > "$PROJ/.ddev/claude/extras/loop2.fragment" <<'F'
+USER root
+F
+  echo "loop2" > "$PROJ/.ddev/claude/extras/loop1.requires"
+  echo "loop1" > "$PROJ/.ddev/claude/extras/loop2.requires"
+
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+extras:
+  - loop1
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "dependency cycle" ]]
+}
+
+@test "escape hatch: .ddev/claude.local/Dockerfile.fragment is appended" {
+  mkdir -p "$PROJ/.ddev/claude.local"
+  cat > "$PROJ/.ddev/claude.local/Dockerfile.fragment" <<'F'
+USER root
+RUN echo local-marker > /tmp/local-marker
+F
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  run grep -F 'local-marker' "$PROJ/.ddev/claude/Dockerfile"
+  [ "$status" -eq 0 ]
+}
+
+@test "escape hatch: .ddev/claude.local/extra-domains.list contents merged" {
+  mkdir -p "$PROJ/.ddev/claude.local"
+  cat > "$PROJ/.ddev/claude.local/extra-domains.list" <<'EOF'
+# local domains
+example-local.test
+EOF
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  run grep -Fx 'example-local.test' "$PROJ/.ddev/claude/extra-domains.list"
+  [ "$status" -eq 0 ]
+}
+
+@test "build stamp: unchanged inputs → second run is a no-op" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+extras:
+  - php
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  mtime1="$(stat -f %m "$PROJ/.ddev/claude/Dockerfile" 2>/dev/null || stat -c %Y "$PROJ/.ddev/claude/Dockerfile")"
+  sleep 1
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  mtime2="$(stat -f %m "$PROJ/.ddev/claude/Dockerfile" 2>/dev/null || stat -c %Y "$PROJ/.ddev/claude/Dockerfile")"
+  [ "$mtime1" = "$mtime2" ]
+}
+
+@test "build stamp: changed config → regenerates" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+extras:
+  - php
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  mtime1="$(stat -f %m "$PROJ/.ddev/claude/Dockerfile" 2>/dev/null || stat -c %Y "$PROJ/.ddev/claude/Dockerfile")"
+  sleep 1
+  # remove php from extras
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+extras: []
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  mtime2="$(stat -f %m "$PROJ/.ddev/claude/Dockerfile" 2>/dev/null || stat -c %Y "$PROJ/.ddev/claude/Dockerfile")"
+  [ "$mtime2" -gt "$mtime1" ]
+}

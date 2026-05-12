@@ -50,13 +50,19 @@ parse_claude_yaml() {
     while [[ "$line" =~ [[:space:]]$ ]]; do line="${line%[[:space:]]}"; done
     [[ -z "$line" ]] && continue
 
-    if [[ "$line" =~ ^([a-zA-Z_]+):[[:space:]]*$ ]]; then
+    # Change A: accept empty-list shorthand `key: []`
+    if [[ "$line" =~ ^([a-zA-Z_]+):[[:space:]]*(\[[[:space:]]*\])?[[:space:]]*$ ]]; then
       key="${BASH_REMATCH[1]}"
       case "$key" in
         extras)               current_key=extras ;;
         extra_allowed_domains) current_key=extra_domains ;;
         *) die "unknown key '$key' in $file (line $line_no; allowed: extras, extra_allowed_domains)" ;;
       esac
+      # `key: []` is the empty-list shorthand — no further items; reset current_key
+      # so any subsequent indented list items would be detected as a parse error.
+      if [[ "${BASH_REMATCH[2]:-}" == *"["* ]]; then
+        current_key=""
+      fi
       continue
     fi
 
@@ -95,11 +101,113 @@ validate_extras() {
   done
 }
 
+# Change B: .requires topological resolver
+# RESOLVED_EXTRAS is filled in resolution order: dependencies before dependents.
+RESOLVED_EXTRAS=()
+_VISITING=()
+_VISITED=()
+
+_in_array() {
+  local needle="$1"; shift
+  local x
+  for x in "$@"; do [[ "$x" == "$needle" ]] && return 0; done
+  return 1
+}
+
+_visit_extra() {
+  local name="$1"
+  _in_array "$name" "${_VISITED[@]+"${_VISITED[@]}"}" && return 0
+  _in_array "$name" "${_VISITING[@]+"${_VISITING[@]}"}" && {
+    local chain
+    chain="$(printf '%s -> ' "${_VISITING[@]}")"
+    die "dependency cycle in extras: ${chain}${name}"
+  }
+  _VISITING+=("$name")
+
+  local req_file="$EXTRAS_DIR/${name}.requires"
+  if [[ -f "$req_file" ]]; then
+    local dep
+    while IFS= read -r dep || [[ -n "$dep" ]]; do
+      dep="${dep%%#*}"
+      dep="$(echo "$dep" | xargs)"
+      [[ -z "$dep" ]] && continue
+      _in_array "$dep" $(ls "$EXTRAS_DIR" 2>/dev/null | sed -n 's/\.fragment$//p') \
+        || die "extra '$name' requires unknown extra '$dep'"
+      _visit_extra "$dep"
+    done < "$req_file"
+  fi
+
+  # pop from VISITING (last element), push to VISITED and RESOLVED_EXTRAS
+  local last_idx=$(( ${#_VISITING[@]} - 1 ))
+  unset "_VISITING[$last_idx]"
+  _VISITING=("${_VISITING[@]+"${_VISITING[@]}"}")
+  _VISITED+=("$name")
+  RESOLVED_EXTRAS+=("$name")
+}
+
+resolve_extras() {
+  RESOLVED_EXTRAS=()
+  _VISITING=()
+  _VISITED=()
+  local e
+  for e in "${EXTRAS[@]+"${EXTRAS[@]}"}"; do
+    _visit_extra "$e"
+  done
+}
+
+# Change D: build stamp helpers
+compute_stamp() {
+  {
+    printf '%s\n' "resolved:${RESOLVED_EXTRAS[*]+"${RESOLVED_EXTRAS[*]}"}"
+    printf '%s\n' "domains:${EXTRA_DOMAINS_LIST[*]+"${EXTRA_DOMAINS_LIST[*]}"}"
+    local e
+    for e in "${RESOLVED_EXTRAS[@]+"${RESOLVED_EXTRAS[@]}"}"; do
+      printf 'fragment:%s\n' "$e"
+      (sha256sum "$EXTRAS_DIR/${e}.fragment" 2>/dev/null || shasum -a 256 "$EXTRAS_DIR/${e}.fragment")
+      if [[ -f "$EXTRAS_DIR/${e}.domains" ]]; then
+        (sha256sum "$EXTRAS_DIR/${e}.domains" 2>/dev/null || shasum -a 256 "$EXTRAS_DIR/${e}.domains")
+      fi
+    done
+    (sha256sum "$BASE_DOCKERFILE" 2>/dev/null || shasum -a 256 "$BASE_DOCKERFILE")
+    if [[ -f "$LOCAL_DIR/Dockerfile.fragment" ]]; then
+      (sha256sum "$LOCAL_DIR/Dockerfile.fragment" 2>/dev/null || shasum -a 256 "$LOCAL_DIR/Dockerfile.fragment")
+    fi
+    if [[ -f "$LOCAL_DIR/extra-domains.list" ]]; then
+      (sha256sum "$LOCAL_DIR/extra-domains.list" 2>/dev/null || shasum -a 256 "$LOCAL_DIR/extra-domains.list")
+    fi
+  } | (sha256sum 2>/dev/null || shasum -a 256) | awk '{print $1}'
+}
+
+stamp_matches() {
+  [[ -f "$STAMP" ]] || return 1
+  [[ -f "$OUT_DOCKERFILE" ]] || return 1
+  [[ -f "$OUT_DOMAINS" ]] || return 1
+  local now then
+  now="$(compute_stamp)"
+  then="$(cat "$STAMP")"
+  [[ "$now" == "$then" ]]
+}
+
+write_stamp() {
+  compute_stamp > "$STAMP"
+}
+
+# Change C: main calls resolve_extras + uses RESOLVED_EXTRAS; stamp no-op
 main() {
   parse_claude_yaml "$CONFIG_FILE"
   validate_extras
+  resolve_extras
+
+  if stamp_matches; then
+    log "inputs unchanged; skipping regeneration."
+    exit 0
+  fi
+
   generate_dockerfile
   generate_domains_list
+  write_stamp
+
+  log "wrote $OUT_DOCKERFILE and $OUT_DOMAINS (extras: ${RESOLVED_EXTRAS[*]+"${RESOLVED_EXTRAS[*]}"})"
 }
 
 generate_dockerfile() {
@@ -109,7 +217,7 @@ generate_dockerfile() {
   tmp_frags="$(mktemp)"
 
   local e first=1
-  for e in "${EXTRAS[@]+"${EXTRAS[@]}"}"; do
+  for e in "${RESOLVED_EXTRAS[@]+"${RESOLVED_EXTRAS[@]}"}"; do
     [[ $first -eq 0 ]] && echo "" >> "$tmp_frags"
     cat "$EXTRAS_DIR/${e}.fragment" >> "$tmp_frags"
     first=0
@@ -133,7 +241,7 @@ generate_dockerfile() {
 generate_domains_list() {
   : > "$OUT_DOMAINS"
   local e d
-  for e in "${EXTRAS[@]+"${EXTRAS[@]}"}"; do
+  for e in "${RESOLVED_EXTRAS[@]+"${RESOLVED_EXTRAS[@]}"}"; do
     if [[ -f "$EXTRAS_DIR/${e}.domains" ]]; then
       while IFS= read -r d || [[ -n "$d" ]]; do
         d="${d%%#*}"
