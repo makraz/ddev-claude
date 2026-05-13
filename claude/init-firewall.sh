@@ -41,21 +41,21 @@ DEFAULT_DOMAINS=(
   "api.github.com"
   "anthropic.com"
   "claude.ai"
-  "registry.npmjs.org"
-  "packagist.org"
-  "repo.packagist.org"
-  "storage.googleapis.com"
 )
 
 EXTRA_DOMAINS=()
-EXTRA_FILE="/etc/firewall/extra-domains.list"
-if [[ -f "$EXTRA_FILE" ]]; then
-  while IFS= read -r line; do
+EXTRA_FILES=(
+  "/var/www/html/.ddev/claude/extra-domains.list"   # build-generated
+  "/etc/firewall/extra-domains.list"                # legacy fallback
+)
+for EXTRA_FILE in "${EXTRA_FILES[@]}"; do
+  [[ -f "$EXTRA_FILE" ]] || continue
+  while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%%#*}"
     line="$(echo "$line" | xargs)"
     [[ -n "$line" ]] && EXTRA_DOMAINS+=("$line")
   done < "$EXTRA_FILE"
-fi
+done
 if [[ -n "${EXTRA_ALLOWED_DOMAINS:-}" ]]; then
   # shellcheck disable=SC2206
   EXTRA_DOMAINS+=( ${EXTRA_ALLOWED_DOMAINS} )
