@@ -6,12 +6,12 @@
 # Lock down outbound network access for the Claude Code sandbox.
 #
 # Allowed outbound destinations:
-#   - github.com, api.github.com            (git, gh CLI, releases)
-#   - anthropic.com                         (Claude Code API traffic)
-#   - registry.npmjs.org                    (npm install)
-#   - packagist.org, repo.packagist.org     (composer)
+#   - github.com, api.github.com            (git, releases)
+#   - anthropic.com, claude.ai              (Claude Code API + OAuth)
 #   - Host gateway IP                       (ddev host talking in)
 #   - Local docker-compose subnets          (sibling ddev services)
+# Additional domains contributed by enabled extras (e.g. packagist.org for
+# the `php` extra) come in via /var/www/html/.ddev/claude/extra-domains.list.
 #
 # Allowed inbound:
 #   - Anything from the host gateway IP
@@ -249,8 +249,6 @@ test_blocked() {
 }
 
 test_allowed  "https://api.github.com"
-test_allowed  "https://registry.npmjs.org/"
-test_allowed  "https://repo.packagist.org/packages.json"
 test_blocked  "https://example.com"
 
 # ddev sibling reachability check (not fatal — the sibling may be down)
