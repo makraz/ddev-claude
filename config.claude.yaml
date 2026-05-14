@@ -1,0 +1,7 @@
+#ddev-generated
+# Hook configuration installed by the ddev-claude addon.
+# The pre-start hook regenerates .ddev/claude/Dockerfile from
+# .ddev/claude/Dockerfile.base + selected extras every time DDEV starts.
+hooks:
+  pre-start:
+    - exec-host: ".ddev/claude/build-image.sh"
