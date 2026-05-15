@@ -1,6 +1,9 @@
 #!/usr/bin/env bats
 
-# Bats tests for ddev-claude.
+# Integration tests for ddev-claude.
+# These tests do a full ddev install + start, so each @test is slow (~1-2 min).
+# For fast unit tests of build-image.sh, see tests/build-image.bats.
+#
 # Run locally:
 #   bats tests/test.bats
 #
@@ -23,33 +26,208 @@ teardown() {
   rm -rf "$TESTDIR"
 }
 
-health_checks() {
-  # Compose fragment in place
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+install_addon() {
+  ddev add-on get "$DIR" >/dev/null
+}
+in_sidecar() {
+  ddev exec -s claude "$@"
+}
+
+# ===========================================================================
+# Install + basic health
+# ===========================================================================
+@test "install: addon installs and sidecar comes up" {
+  install_addon
+  ddev restart >/dev/null
+
+  # Compose fragment
   [ -f "$TESTDIR/.ddev/docker-compose.claude.yaml" ]
-  # Sidecar build context in place
+  # Pre-start hook config
+  [ -f "$TESTDIR/.ddev/config.claude.yaml" ]
+  # Generated Dockerfile (from build-image.sh on pre-start)
   [ -f "$TESTDIR/.ddev/claude/Dockerfile" ]
-  [ -x "$TESTDIR/.ddev/claude/init-firewall.sh" ]
+  # State dir bootstrapped
+  [ -d "$TESTDIR/.ddev/.claude" ]
+  # gitignore extended
+  grep -qxF '/.claude/' "$TESTDIR/.ddev/.gitignore"
+  grep -qxF '/claude.local/' "$TESTDIR/.ddev/.gitignore"
   # Host command installed
   [ -x "$TESTDIR/.ddev/commands/host/claude" ]
   # Sidecar container running
   docker ps --format '{{.Names}}' | grep -qx "ddev-${PROJNAME}-claude"
 }
 
-@test "install from directory" {
-  cd "$TESTDIR"
-  run ddev add-on get "$DIR"
-  [ "$status" -eq 0 ]
+# ===========================================================================
+# Group A — Isolation invariants (security)
+# ===========================================================================
+@test "isolation: default sidecar passes all 6 invariants" {
+  install_addon
   ddev restart >/dev/null
-  run health_checks
+  # Activate firewall (normally done by `ddev claude`; we trigger it directly).
+  docker exec "ddev-${PROJNAME}-claude" sudo /usr/local/bin/init-firewall.sh >/dev/null 2>&1
+
+  # 1. iptables OUTPUT policy is DROP
+  run docker exec "ddev-${PROJNAME}-claude" sudo iptables -L OUTPUT -n
   [ "$status" -eq 0 ]
+  [[ "${lines[0]}" =~ "policy DROP" ]]
+
+  # 2. example.com is blocked
+  run docker exec --user claude "ddev-${PROJNAME}-claude" curl --max-time 3 -s -o /dev/null -w '%{http_code}' https://example.com
+  # curl exit non-zero OR http_code is 000 — either is a block.
+  [ "$status" -ne 0 ] || [ "$output" = "000" ]
+
+  # 3. api.github.com is reachable
+  run docker exec --user claude "ddev-${PROJNAME}-claude" curl --max-time 5 -s -o /dev/null -w '%{http_code}' https://api.github.com
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ ^[23] ]]
+
+  # 4. agent runs as uid 1000
+  run docker exec --user claude "ddev-${PROJNAME}-claude" id -u
+  [ "$status" -eq 0 ]
+  [ "$output" = "1000" ]
+
+  # 5. host home paths leak nowhere
+  run docker exec --user claude "ddev-${PROJNAME}-claude" sh -c 'ls /Users 2>/dev/null; ls /home/'"$USER"' 2>/dev/null'
+  [ -z "$output" ]
+
+  # 6. sudo apt-get is rejected
+  run docker exec --user claude "ddev-${PROJNAME}-claude" sudo -n apt-get install -y htop
+  [ "$status" -ne 0 ]
 }
 
-@test "install from release" {
-  [ -n "${GITHUB_REPO_REF:-}" ] || skip "GITHUB_REPO_REF not set"
-  cd "$TESTDIR"
-  run ddev add-on get "$GITHUB_REPO_REF"
-  [ "$status" -eq 0 ]
+# ===========================================================================
+# Group B — Build pipeline
+# ===========================================================================
+@test "build: no extras → minimal image (no php, no gh)" {
+  install_addon
   ddev restart >/dev/null
-  run health_checks
+
+  run docker exec "ddev-${PROJNAME}-claude" sh -c 'command -v php'
+  [ "$status" -ne 0 ]
+  run docker exec "ddev-${PROJNAME}-claude" sh -c 'command -v composer'
+  [ "$status" -ne 0 ]
+  run docker exec "ddev-${PROJNAME}-claude" sh -c 'command -v gh'
+  [ "$status" -ne 0 ]
+}
+
+@test "build: extras: [php] → php + composer present; packagist allowed" {
+  install_addon
+  cat > "$TESTDIR/.ddev/claude.yaml" <<'YAML'
+extras:
+  - php
+YAML
+  ddev restart >/dev/null
+
+  # php and composer installed
+  run docker exec "ddev-${PROJNAME}-claude" php -v
   [ "$status" -eq 0 ]
+  [[ "$output" =~ "PHP 8.5" ]]
+  run docker exec "ddev-${PROJNAME}-claude" composer --version
+  [ "$status" -eq 0 ]
+
+  # Firewall reachability: packagist
+  docker exec "ddev-${PROJNAME}-claude" sudo /usr/local/bin/init-firewall.sh >/dev/null 2>&1
+  run docker exec --user claude "ddev-${PROJNAME}-claude" curl --max-time 5 -s -o /dev/null -w '%{http_code}' https://repo.packagist.org/packages.json
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ ^[23] ]]
+}
+
+@test "build: escape hatch — claude.local/Dockerfile.fragment is applied" {
+  install_addon
+  mkdir -p "$TESTDIR/.ddev/claude.local"
+  cat > "$TESTDIR/.ddev/claude.local/Dockerfile.fragment" <<'F'
+USER root
+RUN echo escape-hatch-marker > /opt/escape-hatch-marker
+F
+  ddev restart >/dev/null
+
+  run docker exec "ddev-${PROJNAME}-claude" cat /opt/escape-hatch-marker
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ escape-hatch-marker ]]
+}
+
+# ===========================================================================
+# Group C — State + config lifecycle
+# ===========================================================================
+@test "state: addon removal preserves user files" {
+  install_addon
+  cat > "$TESTDIR/.ddev/claude.yaml" <<'YAML'
+extras: []
+YAML
+  mkdir -p "$TESTDIR/.ddev/claude.local"
+  echo "marker" > "$TESTDIR/.ddev/claude.local/userfile.txt"
+  ddev restart >/dev/null
+
+  run ddev add-on remove claude
+  [ "$status" -eq 0 ]
+
+  # Addon-managed files are gone
+  [ ! -f "$TESTDIR/.ddev/docker-compose.claude.yaml" ]
+  [ ! -f "$TESTDIR/.ddev/config.claude.yaml" ]
+  [ ! -f "$TESTDIR/.ddev/commands/host/claude" ]
+  [ ! -f "$TESTDIR/.ddev/claude/Dockerfile" ]
+  [ ! -f "$TESTDIR/.ddev/claude/Dockerfile.base" ]
+  [ ! -f "$TESTDIR/.ddev/claude/build-image.sh" ]
+
+  # User-managed files are preserved
+  [ -f "$TESTDIR/.ddev/claude.yaml" ]
+  [ -d "$TESTDIR/.ddev/.claude" ]
+  [ -f "$TESTDIR/.ddev/claude.local/userfile.txt" ]
+}
+
+# ===========================================================================
+# Group D — CLI
+# ===========================================================================
+@test "cli: ddev claude help lists subcommands" {
+  install_addon
+  ddev restart >/dev/null
+
+  run ddev claude help
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "ddev claude safe" ]]
+  [[ "$output" =~ "ddev claude shell" ]]
+  [[ "$output" =~ "ddev claude exec" ]]
+  [[ "$output" =~ "ddev claude rebuild" ]]
+}
+
+@test "cli: ddev claude exec runs in sidecar as uid 1000" {
+  install_addon
+  ddev restart >/dev/null
+
+  run ddev claude exec id -u
+  [ "$status" -eq 0 ]
+  [ "$output" = "1000" ]
+}
+
+@test "cli: ddev claude exec propagates exit codes" {
+  install_addon
+  ddev restart >/dev/null
+
+  run ddev claude exec false
+  [ "$status" -ne 0 ]
+}
+
+@test "cli: ddev claude rebuild regenerates Dockerfile" {
+  install_addon
+  ddev restart >/dev/null
+
+  # Capture stamp before
+  stamp1="$(cat "$TESTDIR/.ddev/claude/.build-stamp")"
+
+  # Change extras
+  cat > "$TESTDIR/.ddev/claude.yaml" <<'YAML'
+extras:
+  - php
+YAML
+  run ddev claude rebuild
+  [ "$status" -eq 0 ]
+
+  stamp2="$(cat "$TESTDIR/.ddev/claude/.build-stamp")"
+  [ "$stamp1" != "$stamp2" ]
+
+  # Dockerfile now mentions packages.sury.org (php fragment marker)
+  grep -qF 'packages.sury.org' "$TESTDIR/.ddev/claude/Dockerfile"
 }
