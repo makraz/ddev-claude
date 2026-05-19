@@ -51,9 +51,9 @@ in_sidecar() {
   [ -f "$TESTDIR/.ddev/claude/Dockerfile" ]
   # State dir bootstrapped
   [ -d "$TESTDIR/.ddev/.claude" ]
-  # gitignore extended
-  grep -qxF '/.claude/' "$TESTDIR/.ddev/.gitignore"
-  grep -qxF '/claude.local/' "$TESTDIR/.ddev/.gitignore"
+  # gitignore extended (project root, not .ddev/.gitignore which DDEV regenerates)
+  grep -qxF '/.ddev/.claude/' "$TESTDIR/.gitignore"
+  grep -qxF '/.ddev/claude.local/' "$TESTDIR/.gitignore"
   # Host command installed
   [ -x "$TESTDIR/.ddev/commands/host/claude" ]
   # Sidecar container running
