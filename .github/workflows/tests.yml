@@ -32,4 +32,6 @@ jobs:
           sudo apt-get install -y bats
 
       - name: Run tests
-        run: bats tests/test.bats
+        run: |
+          bats tests/build-image.bats
+          bats tests/test.bats
