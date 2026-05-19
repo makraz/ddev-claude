@@ -1,48 +1,15 @@
 #ddev-generated
 # ---------------------------------------------------------------------------
-# Claude Code sandbox — sidecar container for ddev (minimum-viable base).
+# Per-project sidecar Dockerfile template (v0.3.0+).
 #
-# This file is the TEMPLATE. The actual Dockerfile used by docker-compose is
-# generated at build time by build-image.sh, which inlines selected extras
-# (from claude/extras/) plus an optional project-local Dockerfile fragment
-# (.ddev/claude.local/Dockerfile.fragment) at the {{EXTRAS}} marker below.
+# The heavy lifting (packages, claude binary, claude user, sudoers entry) is
+# done in the pre-built image referenced by FROM. This file is the TEMPLATE
+# build-image.sh works against; it inlines selected extras at the marker
+# below.
 # ---------------------------------------------------------------------------
-FROM debian:bookworm-slim
+FROM ghcr.io/makraz/ddev-claude-base:v0.3.0-beta.1
 
-ENV DEBIAN_FRONTEND=noninteractive
-
-# ---------------------------------------------------------------------------
-# Core packages — nothing else by default. Anything project-specific (PHP,
-# composer, gh, playwright, …) is added via the extras catalog or the
-# escape hatch.
-# ---------------------------------------------------------------------------
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates \
-      curl \
-      git \
-      bash \
-      sudo \
-      iptables \
-      ipset \
-      dnsmasq \
-      dnsutils \
-      iproute2 \
- && rm -rf /var/lib/apt/lists/*
-
-# ---------------------------------------------------------------------------
-# Non-root user (uid 1000) — agent runs here, never as root.
-# ---------------------------------------------------------------------------
-ARG USERNAME=claude
-ARG USER_UID=1000
-RUN groupadd --gid $USER_UID $USERNAME \
- && useradd  --uid $USER_UID --gid $USER_UID -m -s /bin/bash $USERNAME \
- && echo "$USERNAME ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" \
-      > /etc/sudoers.d/claude-firewall \
- && chmod 0440 /etc/sudoers.d/claude-firewall
-
-# ---------------------------------------------------------------------------
-# Firewall script — root-owned, never modified at runtime.
-# ---------------------------------------------------------------------------
+USER root
 COPY init-firewall.sh /usr/local/bin/init-firewall.sh
 RUN chmod 0755 /usr/local/bin/init-firewall.sh
 
@@ -55,13 +22,5 @@ RUN chmod 0755 /usr/local/bin/init-firewall.sh
 # {{EXTRAS}}
 # --------------------------------
 
-# ---------------------------------------------------------------------------
-# Install Claude Code as the unprivileged claude user, via the official
-# native installer. No Node.js required.
-# ---------------------------------------------------------------------------
 USER claude
-WORKDIR /home/claude
-RUN curl -fsSL https://claude.ai/install.sh | bash
-ENV PATH="/home/claude/.local/bin:${PATH}"
-
 WORKDIR /var/www/html
