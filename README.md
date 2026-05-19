@@ -11,18 +11,27 @@ added through a small opt-in extras catalog.
 
 ## What you get (default)
 
-- A `claude` sidecar built from `debian:bookworm-slim` with:
-  - Claude Code CLI (native binary, installed via Anthropic's official
-    installer — no Node.js dependency)
+- A `claude` sidecar built from a **pre-built multi-arch base image**
+  (`ghcr.io/makraz/ddev-claude-base:<version>`, published from this repo)
+  containing:
+  - Claude Code CLI (native binary, installed at image build time)
   - git, bash, sudo, curl, ca-certificates
   - iptables/ipset/dnsmasq/dnsutils/iproute2 for the firewall
+  - The unprivileged `claude` user (uid 1000) with a NOPASSWD sudoers entry
+    scoped to `/usr/local/bin/init-firewall.sh`
 - An **outbound firewall** (default-DROP policy) that only allows:
   - `github.com`, `api.github.com`
   - `anthropic.com`, `claude.ai`
   - The DDEV internal network (so the agent can reach `web`, `db`, …)
-- A `ddev claude` host command with subcommands (`safe`, `shell`,
-  `exec`, `rebuild`, `help`).
+- A `ddev claude` host command with subcommands (`safe`, `shell`, `exec`,
+  `rebuild`, `help`).
 - Persistent Claude Code auth + settings at `.ddev/.claude/` (gitignored).
+
+The image tag is pinned to the addon version 1:1. Installing
+`ddev-claude@v0.3.0` always pulls `ddev-claude-base:v0.3.0` — no floating
+`:latest`, no surprise upgrades. The exact Claude Code build baked into a
+given image is recorded in the OCI label `io.makraz.ddev-claude.claude-version`
+(visible via `docker inspect`).
 
 ## Adding extras
 
@@ -165,6 +174,32 @@ storage.googleapis.com
 
 (Requires the Node.js fragment above to be present first.)
 
+## Developing the addon
+
+The published image (`ghcr.io/makraz/ddev-claude-base:<version>`) is built
+from `image/Dockerfile` by `.github/workflows/publish-image.yml` on every
+git tag push. To iterate on `image/Dockerfile` without publishing:
+
+```bash
+# Build locally with the tag the addon expects:
+TAG=$(grep -m1 'FROM ghcr.io/.*/ddev-claude-base:' .ddev/claude/Dockerfile.base | sed 's|.*:||')
+docker build -t "ghcr.io/makraz/ddev-claude-base:${TAG}" image/
+
+# Now ddev restart picks up your local image (Docker's default `missing`
+# pull policy uses local images when present).
+ddev restart
+```
+
+To cut a release:
+
+```bash
+git tag v0.3.0-beta.1            # or v0.3.0 for stable
+git push origin v0.3.0-beta.1
+# publish-image.yml builds + pushes the image to GHCR (~5 min, multi-arch).
+
+gh release create v0.3.0-beta.1 --prerelease --notes-file release-notes.md
+```
+
 ## Verifying the sandbox
 
 After `ddev claude` starts, run a smoke test inside the session:
@@ -185,11 +220,15 @@ with autonomous work.
 ```
 ┌─ Host ───────────────────────────────────────────────────────────────┐
 │                                                                      │
+│   .github/workflows/publish-image.yml ─► ghcr.io/.../ddev-claude-    │
+│        (on tag push)                       base:<version>            │
+│                                                       │              │
 │   .ddev/claude.yaml ──► build-image.sh ──► .ddev/claude/Dockerfile   │
-│                          (pre-start hook)                             │
-│                                                                      │
+│                          (pre-start hook)             │              │
+│                                                       ▼              │
 │   ddev claude ──► docker exec ──► ┌─ claude sidecar ──────────────┐  │
-│                                   │  Claude Code CLI (native)     │  │
+│                                   │  FROM ddev-claude-base:<ver>  │  │
+│                                   │  + init-firewall.sh           │  │
 │                                   │  + selected extras (e.g. php) │  │
 │                                   │                               │  │
 │                                   │  iptables default DROP        │  │
