@@ -18,10 +18,10 @@ ddev add-on get makraz/ddev-claude
 ddev restart
 ```
 
-To install a specific version:
+To pin to a specific version (see [Releases](https://github.com/makraz/ddev-claude/releases) for what's available):
 
 ```bash
-ddev add-on get makraz/ddev-claude@v0.3.0-beta.1
+ddev add-on get makraz/ddev-claude@v0.2.0-beta.1
 ddev restart
 ```
 
@@ -43,12 +43,15 @@ The sidecar is reachable as the `claude` service on the DDEV default network. Au
 
 ### Environment variables
 
+Set on your host shell before `ddev start` / `ddev restart`. The sidecar's `docker-compose.claude.yaml` forwards them into the container.
+
 | Variable | Default | Description |
 | --- | --- | --- |
 | `ANTHROPIC_API_KEY` | _unset_ | API key. Optional — OAuth flow runs on first launch if unset. |
-| `GITHUB_PERSONAL_ACCESS_TOKEN` | _unset_ | Forwarded to the sidecar; powers `git push` to private repos and the GitHub MCP. |
-| `CLAUDE_SAFE` | `0` | Set to `1` to opt out of YOLO mode for a single invocation (back-compat with `ddev claude safe`). |
+| `GITHUB_PERSONAL_ACCESS_TOKEN` | _unset_ | Forwarded to the sidecar so the agent can `git push` to private repos. Also exported as `GH_TOKEN` for `gh` and GitHub MCP fragments added via the escape hatch. |
 | `EXTRA_ALLOWED_DOMAINS` | _unset_ | Space-separated extra outbound domains, allow-listed at runtime. Prefer `.ddev/claude.yaml`'s `extra_allowed_domains:` for project-level settings. |
+| `PLAYWRIGHT_BASE_URL` | `https://web` | Pre-set inside the container so Playwright/MCP fragments added via the escape hatch hit the DDEV `web` service by default. Override on the host shell if needed. |
+| `CLAUDE_SAFE` | `0` | Read by the `ddev claude` host command. Set to `1` to opt out of YOLO mode for a single invocation (equivalent to `ddev claude safe`). |
 
 ## Configuration
 
@@ -154,7 +157,7 @@ An outbound firewall (default-DROP policy) that allows only:
 - The DDEV internal network (so the agent can reach `web`, `db`, sibling add-ons).
 - Whatever each enabled extra contributes (`.domains` files) and your `.ddev/claude.yaml` adds via `extra_allowed_domains`.
 
-The image tag is pinned to the addon version 1:1. Installing `ddev-claude@v0.3.0` always pulls `ddev-claude-base:v0.3.0` — no floating `:latest`. The exact Claude Code build baked into a given image is recorded in the OCI label `io.makraz.ddev-claude.claude-version` and visible via `docker inspect`.
+The image tag is pinned to the addon version 1:1. Installing `ddev-claude@<tag>` always pulls `ddev-claude-base:<tag>` — no floating `:latest`. The exact Claude Code build baked into a given image is recorded in the OCI label `io.makraz.ddev-claude.claude-version` and visible via `docker inspect`.
 
 ## Verifying the sandbox
 
