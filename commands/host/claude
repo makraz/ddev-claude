@@ -1,56 +1,106 @@
 #!/usr/bin/env bash
 #ddev-generated
 ## Description: Run Claude Code inside the sandboxed sidecar container (YOLO mode)
-## Usage: claude [extra args passed through]
+## Usage: claude [subcommand|extra args]
 ## Example: ddev claude
-## Example: ddev claude --help
-## Example: CLAUDE_SAFE=1 ddev claude                  # disable YOLO for this run
-## Example: EXTRA_ALLOWED_DOMAINS="sentry.io" ddev claude
+## Example: ddev claude safe
+## Example: ddev claude shell
+## Example: ddev claude exec composer install
+## Example: ddev claude rebuild
+## Example: ddev claude help
+## Example: ddev claude --resume
 ##
-## This command:
-##   1. Activates the iptables/ipset/dnsmasq firewall inside the
-##      ddev-${DDEV_SITENAME}-claude sidecar container
-##   2. Drops you into an interactive Claude Code session as the
-##      non-root `claude` user, with --dangerously-skip-permissions
-##      (aka YOLO mode) enabled by default — safe here because the
-##      firewall + container isolation contain the blast radius
-##   3. Passes any extra arguments through to the claude CLI
+## Subcommands:
+##   safe              Launch without --dangerously-skip-permissions
+##   shell             Drop into bash inside the sidecar
+##   exec <cmd> ...    Run one command in the sidecar non-interactively
+##   rebuild           Regenerate .ddev/claude/Dockerfile from .ddev/claude.yaml
+##   help              Print this help
 ##
-## To opt out of YOLO for a single run, set CLAUDE_SAFE=1:
-##      CLAUDE_SAFE=1 ddev claude
+## Anything else (including flags like --resume) is passed through to the
+## claude CLI unchanged.
 ##
-## The firewall is NOT reset on exit — it persists for the lifetime of
-## the sidecar container. `ddev restart` or `ddev poweroff` clears it.
+## Back-compat: CLAUDE_SAFE=1 ddev claude still works.
 
 set -euo pipefail
 
 CONTAINER="ddev-${DDEV_SITENAME}-claude"
 
-# Verify the sidecar is running (docker is available on host via ddev).
-if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
+ensure_running() {
+  if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
     echo "error: sidecar container '$CONTAINER' is not running" >&2
-    echo "hint: run 'ddev start' to bring it up" >&2
+    echo "hint:  run 'ddev start' to bring it up" >&2
     exit 1
-fi
+  fi
+}
 
-# 1. Activate the firewall (idempotent; re-running is cheap)
-docker exec "$CONTAINER" sudo /usr/local/bin/init-firewall.sh
+ensure_firewall() {
+  docker exec "$CONTAINER" sudo /usr/local/bin/init-firewall.sh
+}
 
-# 2. Build the claude CLI argument list.
-#    YOLO mode (--dangerously-skip-permissions) is on by default; the
-#    firewall + isolated container contain anything the agent might do.
-#    Set CLAUDE_SAFE=1 to disable it for a single invocation.
-CLAUDE_ARGS=()
-if [[ "${CLAUDE_SAFE:-0}" != "1" ]]; then
-    CLAUDE_ARGS+=(--dangerously-skip-permissions)
-fi
-
-# 3. Interactive Claude Code session as the non-root user.
-#    GITHUB_PERSONAL_ACCESS_TOKEN and GH_TOKEN are forwarded into the
-#    sidecar by docker-compose.claude.yaml — export them in your host
-#    shell before `ddev start` if you need gh / GitHub MCP auth.
-exec docker exec -it \
+launch_claude() {
+  ensure_running
+  ensure_firewall
+  local args=()
+  if [[ "${CLAUDE_SAFE:-0}" != "1" ]]; then
+    args+=(--dangerously-skip-permissions)
+  fi
+  exec docker exec -it \
     --user claude \
     --workdir /var/www/html \
     "$CONTAINER" \
-    claude "${CLAUDE_ARGS[@]}" "$@"
+    claude "${args[@]}" "$@"
+}
+
+rebuild_image() {
+  bash "${DDEV_APPROOT}/.ddev/claude/build-image.sh"
+  echo "Regenerated .ddev/claude/Dockerfile. Run 'ddev restart' to apply."
+}
+
+show_help() {
+  cat <<'HELP'
+Usage:
+  ddev claude                  Interactive Claude Code session (YOLO mode).
+  ddev claude safe             Same, but without --dangerously-skip-permissions.
+  ddev claude shell [args]     Drop into bash inside the sidecar.
+  ddev claude exec <cmd>       Run one command in the sidecar non-interactively.
+  ddev claude rebuild          Regenerate Dockerfile from .ddev/claude.yaml.
+  ddev claude help             Print this help.
+  ddev claude <other args>     Pass through to the claude CLI (e.g. --resume).
+
+Environment:
+  CLAUDE_SAFE=1                Opt out of YOLO mode for this invocation.
+  EXTRA_ALLOWED_DOMAINS=...    Space-separated extra outbound domains.
+HELP
+}
+
+case "${1:-}" in
+  safe)
+    shift
+    CLAUDE_SAFE=1 launch_claude "$@"
+    ;;
+  shell)
+    shift
+    ensure_running
+    ensure_firewall
+    exec docker exec -it --user claude --workdir /var/www/html "$CONTAINER" bash "$@"
+    ;;
+  exec)
+    shift
+    ensure_running
+    ensure_firewall
+    exec docker exec -i --user claude --workdir /var/www/html "$CONTAINER" "$@"
+    ;;
+  rebuild)
+    shift
+    rebuild_image
+    exit 0
+    ;;
+  help)
+    show_help
+    exit 0
+    ;;
+  *)
+    launch_claude "$@"
+    ;;
+esac
