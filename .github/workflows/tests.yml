@@ -31,6 +31,15 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y bats
 
+      - name: Build base image locally (so PR CI works before the tag is published)
+        run: |
+          TAG=$(grep -m1 'FROM ghcr.io/.*/ddev-claude-base:' claude/Dockerfile.base | sed 's|.*:||')
+          if [ -z "$TAG" ]; then
+            echo "could not extract base image tag from claude/Dockerfile.base" >&2
+            exit 1
+          fi
+          docker build -t "ghcr.io/${{ github.repository_owner }}/ddev-claude-base:${TAG}" image/
+
       - name: Run tests
         run: |
           bats tests/build-image.bats
