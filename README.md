@@ -21,7 +21,7 @@ ddev restart
 To pin to a specific version (see [Releases](https://github.com/makraz/ddev-claude/releases) for what's available):
 
 ```bash
-ddev add-on get makraz/ddev-claude@v0.2.0-beta.1
+ddev add-on get makraz/ddev-claude@v0.2.0
 ddev restart
 ```
 
