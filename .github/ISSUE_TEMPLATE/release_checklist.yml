@@ -1,0 +1,69 @@
+name: Release checklist
+description: Track the steps for cutting a new ddev-claude release (maintainers only).
+title: "Release vX.Y.Z"
+labels:
+  - release
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One issue per release. Check items as you go. Full rationale lives in
+        [`docs/MAINTAINING.md`](../blob/main/docs/MAINTAINING.md).
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The version being released (e.g. v0.3.0 or v0.3.0-beta.1).
+      placeholder: v0.3.0
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: pre-release
+    attributes:
+      label: Pre-flight
+      options:
+        - label: All PRs targeting this release are merged.
+        - label: "`tests.yml` is green on `main` (unit + integration)."
+        - label: Threat-model review done for any change touching the firewall/sandbox.
+
+  - type: checkboxes
+    id: changelog
+    attributes:
+      label: Changelog
+      options:
+        - label: Moved `## [Unreleased]` entries into a new `## [vX.Y.Z] — YYYY-MM-DD` section.
+        - label: Left an empty `## [Unreleased]` heading for next time.
+        - label: Entries are written for users (what to do), not raw commit messages.
+
+  - type: checkboxes
+    id: tag-publish
+    attributes:
+      label: Tag & publish
+      options:
+        - label: "Pushed annotated tag (`git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z`)."
+        - label: "`publish-image.yml` succeeded; image published to GHCR."
+        - label: "Verified both arches: `docker buildx imagetools inspect ghcr.io/makraz/ddev-claude-base:vX.Y.Z`."
+
+  - type: checkboxes
+    id: github-release
+    attributes:
+      label: GitHub Release
+      options:
+        - label: Created the Release from the tag with the changelog section as the body.
+        - label: Marked as pre-release if this is a `-beta.N`/`-rc.N` tag.
+
+  - type: checkboxes
+    id: smoke-test
+    attributes:
+      label: Smoke test (as a user)
+      options:
+        - label: "`ddev add-on get makraz/ddev-claude@vX.Y.Z && ddev restart`"
+        - label: "`ddev claude help` works; firewall active in `ddev claude shell`."
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Anything unusual about this release (breaking changes, migration steps, known issues).
