@@ -1,0 +1,43 @@
+name: stale
+
+on:
+  schedule:
+    - cron: '30 6 * * *'  # daily 06:30 UTC
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v9
+        with:
+          # --- Issues: only chase those waiting on the reporter ---
+          only-labels: needs-repro
+          days-before-issue-stale: 30
+          days-before-issue-close: 14
+          stale-issue-label: stale
+          exempt-issue-labels: confirmed,blocked,help wanted,security,pinned
+          stale-issue-message: >
+            This issue has been marked stale because it's waiting on a
+            reproduction and has had no activity for 30 days. Add the requested
+            details (DDEV version, OS/arch, add-on version, exact command, and
+            relevant firewall/logs) to keep it open. It will close in 14 days
+            otherwise — comment any time to reopen.
+          close-issue-message: >
+            Closing due to inactivity while waiting on a reproduction. Comment
+            with the details above and we'll happily reopen.
+
+          # --- PRs: nudge abandoned ones, never auto-close ---
+          days-before-pr-stale: 30
+          days-before-pr-close: -1
+          stale-pr-label: stale
+          exempt-pr-labels: blocked,pinned
+          stale-pr-message: >
+            This pull request has had no activity for 30 days. Rebase or comment
+            to keep it active.
+
+          ascending: true  # process oldest first so the budget hits the right items

@@ -1,0 +1,70 @@
+name: Bug report
+description: Something in the sidecar, firewall, or build pipeline isn't working.
+labels: ["bug", "needs-repro"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Do not** report a firewall bypass, sandbox escape,
+        or secret-exposure issue here — follow [SECURITY.md](../blob/main/SECURITY.md) instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what actually happened?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Exact commands run, and the relevant `.ddev/claude.yaml` (plus any `.ddev/claude.local/` escape-hatch content).
+      placeholder: |
+        1. ddev add-on get makraz/ddev-claude@vX.Y.Z
+        2. ddev restart
+        3. ddev claude ...
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: addon-version
+    attributes:
+      label: Add-on version
+      description: The tag/pin you installed (e.g. v0.3.0-beta.1).
+    validations:
+      required: true
+  - type: input
+    id: ddev-version
+    attributes:
+      label: DDEV version
+      description: Output of `ddev version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: arch
+    attributes:
+      label: Host architecture
+      description: Output of `uname -m`. Firewall/image behaviour differs across architectures.
+      options:
+        - x86_64 / amd64
+        - arm64 / aarch64
+        - other (note in logs)
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Host OS
+      description: e.g. macOS 15.5, Ubuntu 24.04, Windows 11 + WSL2.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output / logs
+      description: |
+        Paste `init-firewall.sh` and/or `build-image.sh` output if relevant. For firewall
+        issues, include the destination that was (un)reachable.
+      render: shell
+    validations:
+      required: false
