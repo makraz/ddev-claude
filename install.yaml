@@ -35,6 +35,7 @@ project_files:
   - claude/Dockerfile.base
   - claude/build-image.sh
   - claude/init-firewall.sh
+  - claude/entrypoint.sh
   - claude/extras/php.fragment
   - claude/extras/php.domains
   - commands/host/claude

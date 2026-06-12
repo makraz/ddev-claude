@@ -84,6 +84,12 @@ in_sidecar() {
   [ "$status" -eq 0 ]
   [[ "$output" =~ ^[23] ]]
 
+  # 3b. downloads.claude.ai is reachable (claude update). Any HTTP response
+  # counts — a block shows up as curl failure / 000.
+  run docker exec --user claude "ddev-${PROJNAME}-claude" curl --max-time 5 -s -o /dev/null -w '%{http_code}' https://downloads.claude.ai
+  [ "$status" -eq 0 ]
+  [ "$output" != "000" ]
+
   # 4. agent runs as uid 1000
   run docker exec --user claude "ddev-${PROJNAME}-claude" id -u
   [ "$status" -eq 0 ]
@@ -96,6 +102,65 @@ in_sidecar() {
   # 6. sudo apt-get is rejected
   run docker exec --user claude "ddev-${PROJNAME}-claude" sudo -n apt-get install -y htop
   [ "$status" -ne 0 ]
+}
+
+@test "isolation: extra_allowed_domains in claude.yaml opens that domain" {
+  install_addon
+  cat > "$TESTDIR/.ddev/claude.yaml" <<'YAML'
+extra_allowed_domains:
+  - example.com
+YAML
+  ddev restart >/dev/null
+  docker exec "ddev-${PROJNAME}-claude" sudo /usr/local/bin/init-firewall.sh >/dev/null 2>&1
+
+  run docker exec --user claude "ddev-${PROJNAME}-claude" curl --max-time 5 -s -o /dev/null -w '%{http_code}' https://example.com
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ ^[23] ]]
+}
+
+@test "isolation: EXTRA_ALLOWED_DOMAINS set before start opens that domain" {
+  install_addon
+  # The env var is consumed once, at container start, by entrypoint.sh (genuine
+  # root, trusted compose env) — so it must be set BEFORE `ddev restart`.
+  export EXTRA_ALLOWED_DOMAINS="example.com"
+  ddev restart >/dev/null
+
+  run docker exec --user claude "ddev-${PROJNAME}-claude" curl --max-time 5 -s -o /dev/null -w '%{http_code}' https://example.com
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ ^[23] ]]
+}
+
+@test "isolation: firewall is active at container start (no ddev claude needed)" {
+  install_addon
+  ddev restart >/dev/null
+  # Deliberately do NOT run init-firewall.sh by hand — entrypoint.sh should
+  # have activated it at container start.
+
+  run docker exec "ddev-${PROJNAME}-claude" sudo iptables -L OUTPUT -n
+  [ "$status" -eq 0 ]
+  [[ "${lines[0]}" =~ "policy DROP" ]]
+
+  # A path that bypasses the `ddev claude` host command is still sandboxed.
+  run docker exec --user claude "ddev-${PROJNAME}-claude" curl --max-time 3 -s -o /dev/null -w '%{http_code}' https://example.com
+  [ "$status" -ne 0 ] || [ "$output" = "000" ]
+}
+
+@test "isolation: agent cannot tamper with the allow-list to widen egress" {
+  install_addon
+  ddev restart >/dev/null
+
+  # The build-baked allow-list lives at a root-owned path the agent can't write.
+  run docker exec --user claude "ddev-${PROJNAME}-claude" sh -c \
+    'echo example.com >> /etc/claude-firewall/extra-domains.list'
+  [ "$status" -ne 0 ]
+
+  # Even exporting EXTRA_ALLOWED_DOMAINS in the agent's own shell and re-running
+  # the firewall via sudo must NOT open the injected domain: the script ignores
+  # its own environment and reads only root-owned allow-list files.
+  docker exec --user claude "ddev-${PROJNAME}-claude" sh -c \
+    'EXTRA_ALLOWED_DOMAINS=example.com sudo /usr/local/bin/init-firewall.sh' >/dev/null 2>&1 || true
+  run docker exec --user claude "ddev-${PROJNAME}-claude" curl --max-time 3 -s -o /dev/null -w '%{http_code}' https://example.com
+  [ "$status" -ne 0 ] || [ "$output" = "000" ]
 }
 
 # ===========================================================================

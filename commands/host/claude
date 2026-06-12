@@ -35,6 +35,12 @@ ensure_running() {
 }
 
 ensure_firewall() {
+  # Re-assert the firewall (idempotent safety net; it is also activated at
+  # container start by entrypoint.sh). We do NOT forward EXTRA_ALLOWED_DOMAINS
+  # here: honoring it on the `sudo` path would let the in-container agent inject
+  # domains by exporting the var itself. The allow-list is read only from
+  # root-owned files; EXTRA_ALLOWED_DOMAINS is consumed once, at start, by
+  # entrypoint.sh — so set it before `ddev start` / `ddev restart`.
   docker exec "$CONTAINER" sudo /usr/local/bin/init-firewall.sh
 }
 
@@ -70,7 +76,8 @@ Usage:
 
 Environment:
   CLAUDE_SAFE=1                Opt out of YOLO mode for this invocation.
-  EXTRA_ALLOWED_DOMAINS=...    Space-separated extra outbound domains.
+  EXTRA_ALLOWED_DOMAINS=...    Space-separated extra outbound domains. Consumed
+                               at container start — set before 'ddev restart'.
 HELP
 }
 
