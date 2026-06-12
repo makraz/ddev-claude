@@ -1,3 +1,9 @@
 .DS_Store
 *.swp
 *.bak
+
+# Editor / IDE
+.idea/
+
+# Local Claude Code session config (plugins, local settings)
+.claude/
