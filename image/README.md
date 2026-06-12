@@ -13,8 +13,12 @@ Source of the pre-built sidecar image published to
 
 ## What's NOT inside
 
-- `init-firewall.sh` — copied in by the addon's per-project wrapper
-  (`claude/Dockerfile.base`), because it changes more often than this image.
+- `init-firewall.sh` and `entrypoint.sh` — copied in by the addon's per-project
+  wrapper (`claude/Dockerfile.base`), because they change more often than this
+  image. `entrypoint.sh` (PID 1, run as root) activates the firewall at
+  container start.
+- The build-baked outbound allow-list (`/etc/claude-firewall/extra-domains.list`)
+  — generated per project from `.ddev/claude.yaml` and copied in by the wrapper.
 - Any extras (PHP, gh, Playwright, etc.) — those install per project via
   the catalog at `claude/extras/` and the escape hatch
   `.ddev/claude.local/Dockerfile.fragment`.
