@@ -6,6 +6,14 @@ All notable changes to this add-on are documented here. This project adheres to
 
 ## [Unreleased]
 
+### Changed
+- The `ddev claude` firewall re-assert is now near-instant. `init-firewall.sh`
+  gained an `--ensure` mode that fast-paths to a no-op when the firewall is
+  already healthy, skipping the full reset, per-domain DNS resolution, and curl
+  smoke tests that previously ran on every `ddev claude` / `shell` / `exec`
+  invocation. A full rebuild still runs at container start and whenever the
+  health check fails, so transient start-time failures still self-heal.
+
 ## [v0.3.0-beta.2] — 2026-06-12
 
 ### Added
