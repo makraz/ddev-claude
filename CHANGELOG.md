@@ -6,6 +6,8 @@ All notable changes to this add-on are documented here. This project adheres to
 
 ## [Unreleased]
 
+## [v0.3.0-beta.3] — 2026-06-18
+
 ### Security
 - The `php` extra now pins the Sury (`packages.sury.org`) signing key. The
   downloaded keyring is verified to contain the expected `DEB.SURY.ORG`
