@@ -11,7 +11,32 @@ the sidecar container. The security promise is:
 > destination, and cannot reach anything outside the project tree and the
 > explicitly allow-listed domains.
 
-A bug that breaks that promise is a real vulnerability. The categories we care
+## What the firewall does NOT protect against
+
+The firewall bounds **where** traffic can go, not **what** leaves through the
+destinations you allow. Read this before trusting the sandbox with secrets:
+
+- **Exfiltration through allow-listed hosts is still possible.** The default
+  allow-list includes `github.com`/`api.github.com`, and the sidecar carries the
+  agent's own `GITHUB_PERSONAL_ACCESS_TOKEN`/`GH_TOKEN` and `ANTHROPIC_API_KEY`.
+  A compromised or adversarial agent can push the project to a repo, create a
+  gist, or open an issue/PR — all over an *allowed* channel. The firewall stops
+  egress to *unknown* hosts; it does **not** stop a determined agent from sending
+  data to a host you have allowed. **Treat the firewall as a guard against
+  accidental/casual egress, not as a barrier against a determined exfiltrator.**
+  The fewer domains you allow-list (and the more narrowly scoped your tokens),
+  the smaller this channel.
+- **IP-based allow-listing is coarse on shared CDNs.** Allow-listing is by
+  resolved IP. When an allowed domain sits behind a shared CDN edge
+  (Fastly/Cloudflare/etc.), other tenants on the same edge IP become reachable
+  too. This is inherent to IP-level filtering.
+- **Anything the agent can already read, it can act on.** The agent has full
+  read/write to the bind-mounted project tree and the tokens in its environment.
+  The sandbox is a network boundary, not a data-classification or DLP layer.
+
+Within those limits, a bug that lets traffic reach a host that is **not**
+allow-listed — or that escalates privilege or escapes the container — is a real
+vulnerability. The categories we care
 about most:
 
 - **Firewall escape / bypass** — outbound traffic reaching a host that is not in

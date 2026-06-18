@@ -186,6 +186,8 @@ The firewall is activated **at container start** by `entrypoint.sh` (PID 1, runn
 
 The outbound allow-list is read **only from root-owned files** (`/etc/claude-firewall/extra-domains.list`, baked into the image from `.ddev/claude.yaml` at build; and `/etc/claude-firewall/runtime-domains.list`, written from `EXTRA_ALLOWED_DOMAINS` at start). Both live outside the bind-mounted project tree, and the script ignores its own environment, so the unprivileged agent cannot widen its egress by editing a file or re-running the firewall via `sudo`. Changing the `.ddev/claude.yaml` domains therefore requires `ddev claude rebuild` + `ddev restart`.
 
+> **The firewall bounds _where_ traffic goes, not _what_ leaves through allowed hosts.** The default allow-list includes GitHub, and the sidecar holds the agent's `GH_TOKEN`/`GITHUB_PERSONAL_ACCESS_TOKEN` — so a determined or compromised agent can still exfiltrate over an allowed channel (e.g. push a repo or gist). Treat it as a guard against *accidental* egress, not a barrier against a determined exfiltrator; keep the allow-list and your token scopes narrow. See [SECURITY.md](SECURITY.md#what-the-firewall-does-not-protect-against) for the full limitations.
+
 ## Developing the addon
 
 The published image (`ghcr.io/makraz/ddev-claude-base:<version>`) is built from `image/Dockerfile` by `.github/workflows/publish-image.yml` on every git tag push. To iterate on `image/Dockerfile` without publishing:
