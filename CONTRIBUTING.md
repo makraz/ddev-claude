@@ -7,6 +7,9 @@ welcome: the **extras catalog**.
 > Found a security issue (firewall bypass, sandbox escape, secret exposure)?
 > **Do not open a public issue or PR.** Follow [SECURITY.md](SECURITY.md) instead.
 
+This project follows a [Code of Conduct](CODE_OF_CONDUCT.md). By participating, you
+are expected to uphold it.
+
 ## Before you start
 
 - **Bugs**: open an issue first with your DDEV version (`ddev version`), host OS +
