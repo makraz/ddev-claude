@@ -181,7 +181,7 @@ The firewall is activated **at container start** by `entrypoint.sh` (PID 1, runn
 2. **Initial DNS resolution** — `dig` resolves the default + extra domains, populating `allowed-ipv4`.
 3. **dnsmasq** — listens on `127.0.0.1`, upstreams to `127.0.0.11` (Docker's embedded DNS, so DDEV service names like `web`/`db` resolve), `1.1.1.1`, `8.8.8.8`. Each allow-listed domain is bound via `ipset=/<domain>/allowed-ipv4`, so future resolutions automatically extend the allow-list — handles CDN IP rotation.
 4. **iptables** — default policy DROP on INPUT/OUTPUT/FORWARD. ACCEPT only loopback, established/related, DNS (port 53), the two ipsets, the host gateway, and inbound 80/443.
-5. **IPv6** — dropped entirely.
+5. **IPv6** — dropped entirely via `ip6tables`. If `ip6tables` is unavailable but the container has an IPv6 default route, `init-firewall.sh` **fails loudly** rather than leave v6 egress unfiltered.
 6. **Smoke tests** — reachability checks for github (must succeed) and `example.com` (must fail).
 
 The outbound allow-list is read **only from root-owned files** (`/etc/claude-firewall/extra-domains.list`, baked into the image from `.ddev/claude.yaml` at build; and `/etc/claude-firewall/runtime-domains.list`, written from `EXTRA_ALLOWED_DOMAINS` at start). Both live outside the bind-mounted project tree, and the script ignores its own environment, so the unprivileged agent cannot widen its egress by editing a file or re-running the firewall via `sudo`. Changing the `.ddev/claude.yaml` domains therefore requires `ddev claude rebuild` + `ddev restart`.
