@@ -6,6 +6,12 @@ All notable changes to this add-on are documented here. This project adheres to
 
 ## [Unreleased]
 
+### Security
+- IPv6 lockdown now fails loudly. Previously, if `ip6tables` was unavailable the
+  firewall silently skipped v6 — leaving an unfiltered egress path on any
+  container with IPv6 connectivity. `init-firewall.sh` now `die`s when
+  `ip6tables` is missing *and* an IPv6 default route exists.
+
 ### Documentation
 - Documented the firewall's limitations explicitly: allow-listed hosts (notably
   GitHub, with the agent's token) remain a viable exfiltration channel, so the
@@ -20,6 +26,12 @@ All notable changes to this add-on are documented here. This project adheres to
   smoke tests that previously ran on every `ddev claude` / `shell` / `exec`
   invocation. A full rebuild still runs at container start and whenever the
   health check fails, so transient start-time failures still self-heal.
+- The ddev sibling-service list for dnsmasq static records is no longer
+  hardcoded to `web db mailpit`. It is single-sourced, self-pruning (only names
+  that resolve get a record), and overridable for non-standard stacks via the
+  `DDEV_CLAUDE_SIBLING_HOSTS` environment variable (space-separated). This is a
+  DNS convenience only and cannot widen egress — the docker subnet is already
+  allowed via the `allowed-net` ipset.
 
 ## [v0.3.0-beta.2] — 2026-06-12
 

@@ -103,6 +103,19 @@ done
 ALL_DOMAINS=( "${DEFAULT_DOMAINS[@]}" "${EXTRA_DOMAINS[@]}" )
 log "allow-listed domains: ${ALL_DOMAINS[*]}"
 
+# ddev sibling-service hostnames, used for the dnsmasq static address records
+# below. This is NOT a security boundary: Docker's embedded DNS (127.0.0.11,
+# the dnsmasq upstream) already resolves every sibling, and the whole docker
+# subnet is allowed via the `allowed-net` ipset regardless. The list only seeds
+# convenience records, and we self-prune to names that actually resolve — so
+# listing a service that doesn't exist is harmless, and missing one costs only
+# a static record (the name still resolves via the upstream). It is therefore
+# safe to read from the environment here (unlike the egress allow-list): an
+# override cannot widen egress. Override for non-standard stacks via
+# DDEV_CLAUDE_SIBLING_HOSTS (space-separated). The default covers the common
+# ddev services; `web` is always present.
+IFS=' ' read -r -a SIBLING_HOSTS <<< "${DDEV_CLAUDE_SIBLING_HOSTS:-web db mailpit}"
+
 # ---------------------------------------------------------------------------
 # Prerequisites
 # ---------------------------------------------------------------------------
@@ -207,7 +220,12 @@ iptables -A INPUT -p udp --dport 443 -j ACCEPT
 iptables -A OUTPUT -p icmp --icmp-type echo-request -j ACCEPT
 iptables -A INPUT  -p icmp --icmp-type echo-reply   -j ACCEPT
 
-# IPv6 -> drop entirely
+# IPv6 -> drop entirely.
+#
+# If ip6tables is unavailable we cannot filter v6. That's only safe when the
+# container has no IPv6 egress path; if a v6 default route exists we would be
+# leaving an unfiltered escape channel, so fail loudly rather than silently
+# skip (the whole point of this script is that there is no unfiltered egress).
 if command -v ip6tables >/dev/null; then
   ip6tables -P INPUT   DROP || true
   ip6tables -P FORWARD DROP || true
@@ -217,6 +235,10 @@ if command -v ip6tables >/dev/null; then
   ip6tables -A OUTPUT -o lo -j ACCEPT || true
   ip6tables -A INPUT  -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
   ip6tables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
+elif ip -6 route show default 2>/dev/null | grep -q .; then
+  die "ip6tables not installed but an IPv6 default route exists — cannot filter IPv6 egress. Rebuild the base image with ip6tables, or disable IPv6 on the container."
+else
+  log "no ip6tables and no IPv6 default route; IPv6 lockdown not needed"
 fi
 
 # ---------------------------------------------------------------------------
@@ -241,8 +263,9 @@ if command -v dnsmasq >/dev/null; then
     for d in "${ALL_DOMAINS[@]}"; do
       echo "ipset=/${d}/allowed-ipv4"
     done
-    # Static address records for Docker-internal service hostnames
-    for svc in web db mailpit; do
+    # Static address records for Docker-internal service hostnames (self-pruning:
+    # only names that currently resolve get a record).
+    for svc in "${SIBLING_HOSTS[@]}"; do
       svc_ip=$(dig @127.0.0.11 +short +time=2 +tries=1 A "$svc" 2>/dev/null | grep -E '^[0-9.]+$' | head -1 || true)
       if [[ -n "$svc_ip" ]]; then
         echo "address=/${svc}/${svc_ip}"
