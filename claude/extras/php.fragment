@@ -1,6 +1,12 @@
 #ddev-generated
 # Extra: php — PHP 8.5 CLI + Composer + common extensions.
 # Runtime allow-list contributions: see php.domains.
+#
+# The Sury (packages.sury.org) signing key is pinned to the DEB.SURY.ORG key
+# fingerprint below; the build fails loudly if the downloaded keyring no longer
+# contains it (rotation/tampering). To re-pin after a legitimate key rotation:
+#   curl -fsSL https://packages.sury.org/php/apt.gpg \
+#     | gpg --show-keys --with-colons --with-fingerprint | awk -F: '/^fpr:/{print $10}'
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
       gnupg \
@@ -13,8 +19,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libfreetype6-dev \
       libonig-dev \
       libxslt-dev \
- && curl -fsSL https://packages.sury.org/php/apt.gpg \
-      -o /etc/apt/trusted.gpg.d/sury-php.gpg \
+ && curl -fsSL https://packages.sury.org/php/apt.gpg -o /tmp/sury-php.gpg \
+ && gpg --show-keys --with-colons --with-fingerprint /tmp/sury-php.gpg \
+      | awk -F: '/^fpr:/{print $10}' \
+      | grep -qx '15058500A0235D97F5D10063B188E2B695BD4743' \
+      || { echo "ERROR: Sury signing key fingerprint mismatch — refusing to trust it" >&2; exit 1; } \
+ && mv /tmp/sury-php.gpg /etc/apt/trusted.gpg.d/sury-php.gpg \
  && echo "deb https://packages.sury.org/php/ bookworm main" \
       > /etc/apt/sources.list.d/sury-php.list \
  && apt-get update && apt-get install -y --no-install-recommends \

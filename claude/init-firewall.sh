@@ -34,6 +34,19 @@ log()  { printf '\033[1;34m[firewall]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[firewall]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[firewall]\033[0m %s\n' "$*" >&2; exit 1; }
 
+# Emit cleaned entries from a list file on stdout: strip `#` comments, trim
+# surrounding whitespace, drop blank lines. No-op when the file is absent.
+read_list_file() {
+  local file="$1" line
+  [[ -f "$file" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%%#*}"
+    line="$(echo "$line" | xargs)"
+    [[ -n "$line" ]] && printf '%s\n' "$line"
+  done < "$file"
+  return 0
+}
+
 [[ $EUID -eq 0 ]] || die "must run as root (try: sudo $0)"
 
 # ---------------------------------------------------------------------------
@@ -93,12 +106,9 @@ EXTRA_FILES=(
   "/etc/firewall/extra-domains.list"            # legacy fallback
 )
 for EXTRA_FILE in "${EXTRA_FILES[@]}"; do
-  [[ -f "$EXTRA_FILE" ]] || continue
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    line="${line%%#*}"
-    line="$(echo "$line" | xargs)"
-    [[ -n "$line" ]] && EXTRA_DOMAINS+=("$line")
-  done < "$EXTRA_FILE"
+  while IFS= read -r line; do
+    EXTRA_DOMAINS+=("$line")
+  done < <(read_list_file "$EXTRA_FILE")
 done
 ALL_DOMAINS=( "${DEFAULT_DOMAINS[@]}" "${EXTRA_DOMAINS[@]}" )
 log "allow-listed domains: ${ALL_DOMAINS[*]}"
