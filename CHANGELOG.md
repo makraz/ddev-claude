@@ -6,6 +6,13 @@ All notable changes to this add-on are documented here. This project adheres to
 
 ## [Unreleased]
 
+### Documentation
+- Documented the firewall's limitations explicitly: allow-listed hosts (notably
+  GitHub, with the agent's token) remain a viable exfiltration channel, so the
+  firewall guards against accidental egress rather than a determined
+  exfiltrator. Added a "What the firewall does NOT protect against" section to
+  `SECURITY.md` and a caveat to the README.
+
 ### Changed
 - The `ddev claude` firewall re-assert is now near-instant. `init-firewall.sh`
   gained an `--ensure` mode that fast-paths to a no-op when the firewall is
