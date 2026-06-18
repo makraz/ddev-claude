@@ -37,6 +37,36 @@ die()  { printf '\033[1;31m[firewall]\033[0m %s\n' "$*" >&2; exit 1; }
 [[ $EUID -eq 0 ]] || die "must run as root (try: sudo $0)"
 
 # ---------------------------------------------------------------------------
+# Mode
+# ---------------------------------------------------------------------------
+# full    (default) — flush + rebuild all rules, resolve domains, smoke-test.
+# --ensure          — idempotent re-assert used by the `ddev claude` host
+#                     command on every invocation. If the firewall is already
+#                     healthy it exits immediately, skipping the full reset,
+#                     per-domain DNS resolution, and the curl smoke tests (the
+#                     expensive parts). The full firewall still runs at
+#                     container start (entrypoint.sh) and whenever the health
+#                     check fails, so a transient start-time failure self-heals
+#                     on the next `ddev claude`.
+MODE="full"
+case "${1:-}" in
+  --ensure) MODE="ensure" ;;
+  "")       ;;
+  *)        die "unknown argument: $1 (usage: $0 [--ensure])" ;;
+esac
+
+# Written at the end of a successful full run; lives in /run (tmpfs, root-owned,
+# cleared on container restart) so the unprivileged agent can neither forge it
+# nor have it survive a restart that dropped the rules.
+READY_MARKER="/run/claude-firewall.ready"
+
+firewall_healthy() {
+  [[ -f "$READY_MARKER" ]] || return 1
+  iptables -S OUTPUT 2>/dev/null | grep -q -- '-P OUTPUT DROP' || return 1
+  return 0
+}
+
+# ---------------------------------------------------------------------------
 # Allow-list
 # ---------------------------------------------------------------------------
 DEFAULT_DOMAINS=(
@@ -80,6 +110,14 @@ command -v iptables >/dev/null || die "iptables not installed"
 command -v ipset    >/dev/null || die "ipset not installed"
 command -v dig      >/dev/null || die "dig not installed"
 command -v dnsmasq  >/dev/null || warn "dnsmasq missing — CDN rotation will break"
+
+# ---------------------------------------------------------------------------
+# Fast path: skip the full rebuild when already healthy (--ensure only)
+# ---------------------------------------------------------------------------
+if [[ "$MODE" == "ensure" ]] && firewall_healthy; then
+  log "firewall already active; skipping re-init (--ensure)"
+  exit 0
+fi
 
 # ---------------------------------------------------------------------------
 # Reset any prior state (idempotent)
@@ -288,5 +326,10 @@ if getent hosts web >/dev/null 2>&1; then
     warn "  ✗ ddev 'web' sibling NOT reachable — check allowed-net rule"
   fi
 fi
+
+# Mark the firewall healthy so a subsequent `--ensure` re-assert can fast-path.
+# Reached only after the full rule set is installed (smoke tests warn but never
+# abort, so a warning here still means the rules are in place).
+: > "$READY_MARKER"
 
 log "firewall ready"

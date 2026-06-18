@@ -145,6 +145,30 @@ YAML
   [ "$status" -ne 0 ] || [ "$output" = "000" ]
 }
 
+@test "isolation: --ensure fast-paths when healthy but rebuilds when not" {
+  install_addon
+  ddev restart >/dev/null
+  # entrypoint.sh ran a full init at start, so the ready marker exists.
+  run docker exec "ddev-${PROJNAME}-claude" test -f /run/claude-firewall.ready
+  [ "$status" -eq 0 ]
+
+  # --ensure on a healthy firewall is a no-op fast path (and stays DROP).
+  run docker exec "ddev-${PROJNAME}-claude" sudo /usr/local/bin/init-firewall.sh --ensure
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "skipping re-init" ]]
+  run docker exec "ddev-${PROJNAME}-claude" sudo iptables -L OUTPUT -n
+  [[ "${lines[0]}" =~ "policy DROP" ]]
+
+  # If the marker is gone (transient start-time failure), --ensure does a full
+  # rebuild and re-establishes the DROP policy + marker — self-heal preserved.
+  docker exec "ddev-${PROJNAME}-claude" sudo rm -f /run/claude-firewall.ready
+  run docker exec "ddev-${PROJNAME}-claude" sudo /usr/local/bin/init-firewall.sh --ensure
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "firewall ready" ]]
+  run docker exec "ddev-${PROJNAME}-claude" test -f /run/claude-firewall.ready
+  [ "$status" -eq 0 ]
+}
+
 @test "isolation: agent cannot tamper with the allow-list to widen egress" {
   install_addon
   ddev restart >/dev/null

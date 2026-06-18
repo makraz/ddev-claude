@@ -36,12 +36,17 @@ ensure_running() {
 
 ensure_firewall() {
   # Re-assert the firewall (idempotent safety net; it is also activated at
-  # container start by entrypoint.sh). We do NOT forward EXTRA_ALLOWED_DOMAINS
-  # here: honoring it on the `sudo` path would let the in-container agent inject
-  # domains by exporting the var itself. The allow-list is read only from
-  # root-owned files; EXTRA_ALLOWED_DOMAINS is consumed once, at start, by
-  # entrypoint.sh — so set it before `ddev start` / `ddev restart`.
-  docker exec "$CONTAINER" sudo /usr/local/bin/init-firewall.sh
+  # container start by entrypoint.sh). `--ensure` fast-paths to a near-instant
+  # no-op when the firewall is already healthy, so it skips the full reset,
+  # per-domain DNS resolution, and curl smoke tests on every invocation; a full
+  # rebuild still runs when the health check fails (e.g. start-time init failed).
+  #
+  # We do NOT forward EXTRA_ALLOWED_DOMAINS here: honoring it on the `sudo` path
+  # would let the in-container agent inject domains by exporting the var itself.
+  # The allow-list is read only from root-owned files; EXTRA_ALLOWED_DOMAINS is
+  # consumed once, at start, by entrypoint.sh — so set it before `ddev start` /
+  # `ddev restart`.
+  docker exec "$CONTAINER" sudo /usr/local/bin/init-firewall.sh --ensure
 }
 
 launch_claude() {
