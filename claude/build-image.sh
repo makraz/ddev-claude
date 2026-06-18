@@ -31,11 +31,40 @@ STAMP="$ADDON_DIR/.build-stamp"
 die() { echo "build-image: error: $*" >&2; exit 1; }
 log() { echo "build-image: $*"; }
 
+# Hash a file (or stdin, if no args), preferring sha256sum and falling back to
+# shasum -a 256 (e.g. on macOS hosts where coreutils isn't installed).
+_sha() { sha256sum "$@" 2>/dev/null || shasum -a 256 "$@"; }
+
+# Emit cleaned entries from a list file on stdout: strip `#` comments, trim
+# surrounding whitespace, drop blank lines. No-op when the file is absent.
+read_list_file() {
+  local file="$1" line
+  [[ -f "$file" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%%#*}"
+    line="$(echo "$line" | xargs)"
+    [[ -n "$line" ]] && printf '%s\n' "$line"
+  done < "$file"
+  return 0
+}
+
 [[ -f "$BASE_DOCKERFILE" ]] || die "missing $BASE_DOCKERFILE"
 
-# Globals populated by parse_claude_yaml.
+# Globals populated by parse_claude_yaml / discover_extras.
 EXTRAS=()
 EXTRA_DOMAINS_LIST=()
+AVAILABLE_EXTRAS=()
+
+# Populate AVAILABLE_EXTRAS from the *.fragment files in the extras dir.
+discover_extras() {
+  AVAILABLE_EXTRAS=()
+  [[ -d "$EXTRAS_DIR" ]] || return 0
+  local f
+  for f in "$EXTRAS_DIR"/*.fragment; do
+    [[ -f "$f" ]] || continue
+    AVAILABLE_EXTRAS+=("$(basename "$f" .fragment)")
+  done
+}
 
 parse_claude_yaml() {
   local file="$1"
@@ -83,21 +112,10 @@ parse_claude_yaml() {
 }
 
 validate_extras() {
-  local available=()
-  if [[ -d "$EXTRAS_DIR" ]]; then
-    local f
-    for f in "$EXTRAS_DIR"/*.fragment; do
-      [[ -f "$f" ]] || continue
-      available+=("$(basename "$f" .fragment)")
-    done
-  fi
-  local e found a
+  local e
   for e in "${EXTRAS[@]+"${EXTRAS[@]}"}"; do
-    found=0
-    for a in "${available[@]+"${available[@]}"}"; do
-      [[ "$a" == "$e" ]] && found=1 && break
-    done
-    [[ $found -eq 1 ]] || die "unknown extra '$e' (available: ${available[*]:-<none>})"
+    _in_array "$e" "${AVAILABLE_EXTRAS[@]+"${AVAILABLE_EXTRAS[@]}"}" \
+      || die "unknown extra '$e' (available: ${AVAILABLE_EXTRAS[*]:-<none>})"
   done
 }
 
@@ -124,18 +142,12 @@ _visit_extra() {
   }
   _VISITING+=("$name")
 
-  local req_file="$EXTRAS_DIR/${name}.requires"
-  if [[ -f "$req_file" ]]; then
-    local dep
-    while IFS= read -r dep || [[ -n "$dep" ]]; do
-      dep="${dep%%#*}"
-      dep="$(echo "$dep" | xargs)"
-      [[ -z "$dep" ]] && continue
-      _in_array "$dep" $(ls "$EXTRAS_DIR" 2>/dev/null | sed -n 's/\.fragment$//p') \
-        || die "extra '$name' requires unknown extra '$dep'"
-      _visit_extra "$dep"
-    done < "$req_file"
-  fi
+  local dep
+  while IFS= read -r dep; do
+    _in_array "$dep" "${AVAILABLE_EXTRAS[@]+"${AVAILABLE_EXTRAS[@]}"}" \
+      || die "extra '$name' requires unknown extra '$dep'"
+    _visit_extra "$dep"
+  done < <(read_list_file "$EXTRAS_DIR/${name}.requires")
 
   # pop from VISITING (last element), push to VISITED and RESOLVED_EXTRAS
   local last_idx=$(( ${#_VISITING[@]} - 1 ))
@@ -163,19 +175,13 @@ compute_stamp() {
     local e
     for e in "${RESOLVED_EXTRAS[@]+"${RESOLVED_EXTRAS[@]}"}"; do
       printf 'fragment:%s\n' "$e"
-      (sha256sum "$EXTRAS_DIR/${e}.fragment" 2>/dev/null || shasum -a 256 "$EXTRAS_DIR/${e}.fragment")
-      if [[ -f "$EXTRAS_DIR/${e}.domains" ]]; then
-        (sha256sum "$EXTRAS_DIR/${e}.domains" 2>/dev/null || shasum -a 256 "$EXTRAS_DIR/${e}.domains")
-      fi
+      _sha "$EXTRAS_DIR/${e}.fragment"
+      [[ -f "$EXTRAS_DIR/${e}.domains" ]] && _sha "$EXTRAS_DIR/${e}.domains" || :
     done
-    (sha256sum "$BASE_DOCKERFILE" 2>/dev/null || shasum -a 256 "$BASE_DOCKERFILE")
-    if [[ -f "$LOCAL_DIR/Dockerfile.fragment" ]]; then
-      (sha256sum "$LOCAL_DIR/Dockerfile.fragment" 2>/dev/null || shasum -a 256 "$LOCAL_DIR/Dockerfile.fragment")
-    fi
-    if [[ -f "$LOCAL_DIR/extra-domains.list" ]]; then
-      (sha256sum "$LOCAL_DIR/extra-domains.list" 2>/dev/null || shasum -a 256 "$LOCAL_DIR/extra-domains.list")
-    fi
-  } | (sha256sum 2>/dev/null || shasum -a 256) | awk '{print $1}'
+    _sha "$BASE_DOCKERFILE"
+    [[ -f "$LOCAL_DIR/Dockerfile.fragment" ]] && _sha "$LOCAL_DIR/Dockerfile.fragment" || :
+    [[ -f "$LOCAL_DIR/extra-domains.list" ]] && _sha "$LOCAL_DIR/extra-domains.list" || :
+  } | _sha | awk '{print $1}'
 }
 
 stamp_matches() {
@@ -195,6 +201,7 @@ write_stamp() {
 # Change C: main calls resolve_extras + uses RESOLVED_EXTRAS; stamp no-op
 main() {
   parse_claude_yaml "$CONFIG_FILE"
+  discover_extras
   validate_extras
   resolve_extras
 
@@ -242,21 +249,9 @@ generate_domains_list() {
   : > "$OUT_DOMAINS"
   local e d
   for e in "${RESOLVED_EXTRAS[@]+"${RESOLVED_EXTRAS[@]}"}"; do
-    if [[ -f "$EXTRAS_DIR/${e}.domains" ]]; then
-      while IFS= read -r d || [[ -n "$d" ]]; do
-        d="${d%%#*}"
-        d="$(echo "$d" | xargs)"
-        [[ -n "$d" ]] && echo "$d" >> "$OUT_DOMAINS"
-      done < "$EXTRAS_DIR/${e}.domains"
-    fi
+    read_list_file "$EXTRAS_DIR/${e}.domains" >> "$OUT_DOMAINS"
   done
-  if [[ -f "$LOCAL_DIR/extra-domains.list" ]]; then
-    while IFS= read -r d || [[ -n "$d" ]]; do
-      d="${d%%#*}"
-      d="$(echo "$d" | xargs)"
-      [[ -n "$d" ]] && echo "$d" >> "$OUT_DOMAINS"
-    done < "$LOCAL_DIR/extra-domains.list"
-  fi
+  read_list_file "$LOCAL_DIR/extra-domains.list" >> "$OUT_DOMAINS"
   for d in "${EXTRA_DOMAINS_LIST[@]+"${EXTRA_DOMAINS_LIST[@]}"}"; do
     echo "$d" >> "$OUT_DOMAINS"
   done

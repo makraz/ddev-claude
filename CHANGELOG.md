@@ -7,6 +7,10 @@ All notable changes to this add-on are documented here. This project adheres to
 ## [Unreleased]
 
 ### Security
+- The `php` extra now pins the Sury (`packages.sury.org`) signing key. The
+  downloaded keyring is verified to contain the expected `DEB.SURY.ORG`
+  fingerprint before it is trusted; the build fails loudly on a mismatch
+  (rotation/tampering), instead of trusting whatever key the endpoint serves.
 - IPv6 lockdown now fails loudly. Previously, if `ip6tables` was unavailable the
   firewall silently skipped v6 — leaving an unfiltered egress path on any
   container with IPv6 connectivity. `init-firewall.sh` now `die`s when
@@ -32,6 +36,14 @@ All notable changes to this add-on are documented here. This project adheres to
   `DDEV_CLAUDE_SIBLING_HOSTS` environment variable (space-separated). This is a
   DNS convenience only and cannot widen egress — the docker subnet is already
   allowed via the `allowed-net` ipset.
+
+### Internal
+- Refactored the shell scripts to remove duplication: a shared `read_list_file`
+  helper (comment-strip + trim + skip-blank) in `build-image.sh` and
+  `init-firewall.sh`, a `_sha` sha256/shasum fallback helper, and a single
+  `discover_extras` source of available extras reused by both `validate_extras`
+  and the `.requires` dependency resolver (replacing an inline `ls | sed`). No
+  behavior change; covered by the existing `tests/build-image.bats` suite.
 
 ## [v0.3.0-beta.2] — 2026-06-12
 
