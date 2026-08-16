@@ -283,3 +283,83 @@ YAML
   [ "$status" -ne 0 ]
   [[ "$output" =~ "unknown key 'nonsense'" ]]
 }
+
+@test "generator: absent tools key → default four tools in tools.list" {
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  run cat "$PROJ/.ddev/claude/tools.list"
+  [ "$output" = "Read
+Write
+Bash
+Skill" ]
+}
+
+@test "generator: explicit tools key overrides the default" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+tools:
+  - Read
+  - Bash
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  run cat "$PROJ/.ddev/claude/tools.list"
+  [ "$output" = "Read
+Bash" ]
+}
+
+@test "generator: absent plugins key → default four in settings.json" {
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  run grep -c '@claude-plugins-official": true' "$PROJ/.ddev/claude/settings.json"
+  [ "$output" -eq 4 ]
+}
+
+@test "generator: bare plugin name gains the default marketplace" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+plugins:
+  - superpowers
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  run grep -F '"superpowers@claude-plugins-official": true' "$PROJ/.ddev/claude/settings.json"
+  [ "$status" -eq 0 ]
+}
+
+@test "generator: explicit marketplace is preserved" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+plugins:
+  - mything@my-marketplace
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  run grep -F '"mything@my-marketplace": true' "$PROJ/.ddev/claude/settings.json"
+  [ "$status" -eq 0 ]
+}
+
+@test "generator: changing tools changes the build stamp" {
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  local first
+  first="$(cat "$PROJ/.ddev/claude/.build-stamp")"
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+tools:
+  - Read
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$PROJ/.ddev/claude/.build-stamp")" != "$first" ]
+}
+
+@test "generator: changing plugins changes the build stamp" {
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  local first
+  first="$(cat "$PROJ/.ddev/claude/.build-stamp")"
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+plugins:
+  - code-review
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$PROJ/.ddev/claude/.build-stamp")" != "$first" ]
+}

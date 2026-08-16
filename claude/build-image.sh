@@ -26,6 +26,8 @@ EXTRAS_DIR="$ADDON_DIR/extras"
 BASE_DOCKERFILE="$ADDON_DIR/Dockerfile.base"
 OUT_DOCKERFILE="$ADDON_DIR/Dockerfile"
 OUT_DOMAINS="$ADDON_DIR/extra-domains.list"
+OUT_TOOLS="$ADDON_DIR/tools.list"
+OUT_SETTINGS="$ADDON_DIR/settings.json"
 STAMP="$ADDON_DIR/.build-stamp"
 
 die() { echo "build-image: error: $*" >&2; exit 1; }
@@ -245,6 +247,8 @@ compute_stamp() {
     _sha "$BASE_DOCKERFILE"
     [[ -f "$LOCAL_DIR/Dockerfile.fragment" ]] && _sha "$LOCAL_DIR/Dockerfile.fragment" || :
     [[ -f "$LOCAL_DIR/extra-domains.list" ]] && _sha "$LOCAL_DIR/extra-domains.list" || :
+    printf '%s\n' "tools:${TOOLS[*]+"${TOOLS[*]}"}"
+    printf '%s\n' "plugins:${PLUGINS[*]+"${PLUGINS[*]}"}"
   } | _sha | awk '{print $1}'
 }
 
@@ -252,6 +256,8 @@ stamp_matches() {
   [[ -f "$STAMP" ]] || return 1
   [[ -f "$OUT_DOCKERFILE" ]] || return 1
   [[ -f "$OUT_DOMAINS" ]] || return 1
+  [[ -f "$OUT_TOOLS" ]] || return 1
+  [[ -f "$OUT_SETTINGS" ]] || return 1
   local now then
   now="$(compute_stamp)"
   then="$(cat "$STAMP")"
@@ -288,6 +294,8 @@ main() {
 
   generate_dockerfile
   generate_domains_list
+  generate_tools_list
+  generate_settings_json
   write_stamp
 
   log "wrote $OUT_DOCKERFILE and $OUT_DOMAINS (extras: ${RESOLVED_EXTRAS[*]+"${RESOLVED_EXTRAS[*]}"})"
@@ -334,6 +342,33 @@ generate_domains_list() {
 
   # Dedup, preserving first occurrence order.
   awk '!seen[$0]++' "$OUT_DOMAINS" > "${OUT_DOMAINS}.tmp" && mv "${OUT_DOMAINS}.tmp" "$OUT_DOMAINS"
+}
+
+generate_tools_list() {
+  local t
+  : > "$OUT_TOOLS"
+  for t in "${TOOLS[@]+"${TOOLS[@]}"}"; do
+    printf '%s\n' "$t" >> "$OUT_TOOLS"
+  done
+}
+
+generate_settings_json() {
+  local p name mkt first=1
+  {
+    printf '{\n'
+    printf '  "enabledPlugins": {\n'
+    for p in "${PLUGINS[@]+"${PLUGINS[@]}"}"; do
+      name="${p%%@*}"
+      mkt="${p#*@}"
+      [[ "$mkt" == "$p" ]] && mkt="$DEFAULT_MARKETPLACE"
+      [[ $first -eq 0 ]] && printf ',\n'
+      printf '    "%s@%s": true' "$name" "$mkt"
+      first=0
+    done
+    [[ $first -eq 0 ]] && printf '\n'
+    printf '  }\n'
+    printf '}\n'
+  } > "$OUT_SETTINGS"
 }
 
 main "$@"
