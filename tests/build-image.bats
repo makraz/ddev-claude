@@ -399,6 +399,23 @@ YAML
   [ "$status" -eq 0 ]
 }
 
+# Regression guard. The pre-v0.4.0 docker-compose.claude.yaml mounted
+# ../.ddev/.claude/bash_history.d at /home/claude/.bash_history.d. Task 3
+# replaced the whole volumes: block and the first draft dropped this mount
+# entirely — silently losing shell-history persistence across restarts. The
+# base image sets that path and image/Dockerfile is frozen this release, so
+# the mount has to come from the generated override.
+@test "mount: both variants mount the bash history dir" {
+  for mode in bind mutagen; do
+    printf 'mount_mode: %s\n' "$mode" > "$PROJ/.ddev/claude.yaml"
+    run "$PROJ/.ddev/claude/build-image.sh"
+    [ "$status" -eq 0 ]
+    run grep -Fx '            - ../.ddev/.claude/bash_history.d:/home/claude/.bash_history.d' \
+      "$PROJ/.ddev/docker-compose.claude-mounts.yaml"
+    [ "$status" -eq 0 ]
+  done
+}
+
 @test "mount: auto reads performance_mode from project config.yaml" {
   printf 'name: demo\nperformance_mode: mutagen\n' > "$PROJ/.ddev/config.yaml"
   cat > "$PROJ/.ddev/claude.yaml" <<'YAML'

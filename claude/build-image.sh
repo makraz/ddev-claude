@@ -439,6 +439,12 @@ generate_mounts_override() {
     echo '            - type: volume'
     echo '              source: claude_state'
     echo '              target: /home/claude/.claude'
+    # Unconditional, and a host bind rather than a volume: bash history is
+    # tiny and cold, so it costs nothing on the host, it stays inspectable,
+    # and it keeps install.yaml's `mkdir -p .ddev/.claude/bash_history.d`
+    # meaningful instead of orphaning that directory. This mount was never
+    # topology-dependent — it is a sibling of the root mount, not part of it.
+    echo '            - ../.ddev/.claude/bash_history.d:/home/claude/.bash_history.d'
     echo 'volumes:'
     if [[ "$RESOLVED_MOUNT" == "mutagen" ]]; then
       echo '    project_mutagen:'
