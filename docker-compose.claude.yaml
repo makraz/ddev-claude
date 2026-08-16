@@ -17,13 +17,11 @@ services:
         # claude` host command always execs with `--user claude`.
         user: root
         working_dir: /var/www/html
-        volumes:
-            - ../:/var/www/html
-            # State (auth, settings, history) lives in the project tree at
-            # .ddev/.claude/ — visible/inspectable from the host. Bootstrap
-            # is done in install.yaml's pre_install_actions.
-            - ../.ddev/.claude:/home/claude/.claude
-            - ../.ddev/.claude/bash_history.d:/home/claude/.bash_history.d
+        # Volumes are supplied by the generated
+        # .ddev/docker-compose.claude-mounts.yaml, because the mount topology
+        # depends on whether Mutagen is enabled for this project. DDEV merges
+        # every .ddev/docker-compose.*.yaml file; an override written anywhere
+        # else is silently ignored.
         environment:
             - ANTHROPIC_API_KEY
             - PLAYWRIGHT_BASE_URL=https://web

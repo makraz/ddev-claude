@@ -363,3 +363,79 @@ YAML
   [ "$status" -eq 0 ]
   [ "$(cat "$PROJ/.ddev/claude/.build-stamp")" != "$first" ]
 }
+
+@test "mount: mount_mode bind → bind override, no mutagen volume" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+mount_mode: bind
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  run grep -F '../:/var/www/html' "$PROJ/.ddev/docker-compose.claude-mounts.yaml"
+  [ "$status" -eq 0 ]
+  run grep -F 'project_mutagen' "$PROJ/.ddev/docker-compose.claude-mounts.yaml"
+  [ "$status" -ne 0 ]
+  [ "$(cat "$PROJ/.ddev/claude/.mount-mode")" = "bind" ]
+}
+
+@test "mount: mount_mode mutagen → volume override, no root bind" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+mount_mode: mutagen
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  run grep -F 'source: project_mutagen' "$PROJ/.ddev/docker-compose.claude-mounts.yaml"
+  [ "$status" -eq 0 ]
+  run grep -Fx '            - ../:/var/www/html' "$PROJ/.ddev/docker-compose.claude-mounts.yaml"
+  [ "$status" -ne 0 ]
+  [ "$(cat "$PROJ/.ddev/claude/.mount-mode")" = "mutagen" ]
+}
+
+@test "mount: both overrides always declare the claude_state volume" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+mount_mode: bind
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  run grep -F 'claude_state' "$PROJ/.ddev/docker-compose.claude-mounts.yaml"
+  [ "$status" -eq 0 ]
+}
+
+@test "mount: auto reads performance_mode from project config.yaml" {
+  printf 'name: demo\nperformance_mode: mutagen\n' > "$PROJ/.ddev/config.yaml"
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+mount_mode: auto
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$PROJ/.ddev/claude/.mount-mode")" = "mutagen" ]
+}
+
+@test "mount: auto honours performance_mode none in project config.yaml" {
+  printf 'name: demo\nperformance_mode: none\n' > "$PROJ/.ddev/config.yaml"
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$PROJ/.ddev/claude/.mount-mode")" = "bind" ]
+}
+
+@test "mount: auto ignores a commented-out performance_mode" {
+  printf 'name: demo\n# performance_mode: mutagen\n' > "$PROJ/.ddev/config.yaml"
+  export DDEV_GLOBAL_DIR="$PROJ/fake-global"
+  mkdir -p "$DDEV_GLOBAL_DIR"
+  printf 'performance_mode: none\n' > "$DDEV_GLOBAL_DIR/global_config.yaml"
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$PROJ/.ddev/claude/.mount-mode")" = "bind" ]
+}
+
+@test "mount: changing the resolved mount mode changes the build stamp" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+mount_mode: bind
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  local first
+  first="$(cat "$PROJ/.ddev/claude/.build-stamp")"
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+mount_mode: mutagen
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$(cat "$PROJ/.ddev/claude/.build-stamp")" != "$first" ]
+}

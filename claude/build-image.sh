@@ -28,6 +28,9 @@ OUT_DOCKERFILE="$ADDON_DIR/Dockerfile"
 OUT_DOMAINS="$ADDON_DIR/extra-domains.list"
 OUT_TOOLS="$ADDON_DIR/tools.list"
 OUT_SETTINGS="$ADDON_DIR/settings.json"
+OUT_MOUNTS="$DDEV_DIR/docker-compose.claude-mounts.yaml"
+OUT_MOUNT_MODE="$ADDON_DIR/.mount-mode"
+RESOLVED_MOUNT=""
 STAMP="$ADDON_DIR/.build-stamp"
 
 die() { echo "build-image: error: $*" >&2; exit 1; }
@@ -249,6 +252,7 @@ compute_stamp() {
     [[ -f "$LOCAL_DIR/extra-domains.list" ]] && _sha "$LOCAL_DIR/extra-domains.list" || :
     printf '%s\n' "tools:${TOOLS[*]+"${TOOLS[*]}"}"
     printf '%s\n' "plugins:${PLUGINS[*]+"${PLUGINS[*]}"}"
+    printf '%s\n' "mount:${RESOLVED_MOUNT}"
   } | _sha | awk '{print $1}'
 }
 
@@ -258,6 +262,7 @@ stamp_matches() {
   [[ -f "$OUT_DOMAINS" ]] || return 1
   [[ -f "$OUT_TOOLS" ]] || return 1
   [[ -f "$OUT_SETTINGS" ]] || return 1
+  [[ -f "$OUT_MOUNTS" ]] || return 1
   local now then
   now="$(compute_stamp)"
   then="$(cat "$STAMP")"
@@ -276,6 +281,45 @@ apply_defaults() {
   return 0
 }
 
+# Echo the value of an uncommented top-level `performance_mode:` key, or
+# nothing. Anchored at column 0, so commented lines never match.
+read_performance_mode() {
+  local f="$1"
+  [[ -f "$f" ]] || return 0
+  sed -n 's/^performance_mode:[[:space:]]*"\{0,1\}\([A-Za-z]*\)"\{0,1\}[[:space:]]*$/\1/p' "$f" | tail -1
+}
+
+# Resolution order mirrors DDEV's own: claude.yaml → project config →
+# global config → OS default.
+#
+# We deliberately do NOT probe for the external Mutagen volume here. DDEV
+# creates it during start, after this pre-start hook runs, so a first-ever
+# `ddev start` would always see it missing and wrongly emit the bind mount.
+# Referencing it as external is exactly as safe as DDEV's own generated
+# compose, which declares the same volume the same way.
+resolve_mount_mode() {
+  if [[ "$MOUNT_MODE" != "auto" ]]; then
+    RESOLVED_MOUNT="$MOUNT_MODE"
+    return 0
+  fi
+
+  local pm
+  pm="$(read_performance_mode "$DDEV_DIR/config.yaml")"
+  [[ -z "$pm" ]] && pm="$(read_performance_mode "${DDEV_GLOBAL_DIR:-$HOME/.ddev}/global_config.yaml")"
+  if [[ -z "$pm" ]]; then
+    case "$(uname -s)" in
+      Darwin|MINGW*|MSYS*|CYGWIN*) pm="mutagen" ;;
+      *)                           pm="none" ;;
+    esac
+  fi
+
+  if [[ "$pm" == "mutagen" ]]; then
+    RESOLVED_MOUNT="mutagen"
+  else
+    RESOLVED_MOUNT="bind"
+  fi
+}
+
 # Change C: main calls resolve_extras + uses RESOLVED_EXTRAS; stamp no-op
 main() {
   parse_claude_yaml "$CONFIG_FILE"
@@ -285,6 +329,7 @@ main() {
   validate_tools
   validate_plugins
   apply_defaults
+  resolve_mount_mode
   resolve_extras
 
   if stamp_matches; then
@@ -296,9 +341,10 @@ main() {
   generate_domains_list
   generate_tools_list
   generate_settings_json
+  generate_mounts_override
   write_stamp
 
-  log "wrote $OUT_DOCKERFILE and $OUT_DOMAINS (extras: ${RESOLVED_EXTRAS[*]+"${RESOLVED_EXTRAS[*]}"})"
+  log "wrote $OUT_DOCKERFILE, $OUT_DOMAINS, $OUT_TOOLS, $OUT_SETTINGS and $OUT_MOUNTS (extras: ${RESOLVED_EXTRAS[*]+"${RESOLVED_EXTRAS[*]}"}; mount: ${RESOLVED_MOUNT})"
 }
 
 generate_dockerfile() {
@@ -369,6 +415,41 @@ generate_settings_json() {
     printf '  }\n'
     printf '}\n'
   } > "$OUT_SETTINGS"
+}
+
+generate_mounts_override() {
+  {
+    echo '#ddev-generated'
+    echo '# Mount topology for the claude sidecar. Regenerated at every pre-start'
+    echo "# by build-image.sh. Resolved mount mode: ${RESOLVED_MOUNT}."
+    echo 'services:'
+    echo '    claude:'
+    echo '        volumes:'
+    if [[ "$RESOLVED_MOUNT" == "mutagen" ]]; then
+      echo '            - type: volume'
+      echo '              source: project_mutagen'
+      echo '              target: /var/www'
+      echo '              volume:'
+      echo '                  nocopy: true'
+      echo '            - ../.git:/var/www/html/.git'
+    else
+      echo '            - ../:/var/www/html'
+    fi
+    echo '            - ../.ddev:/mnt/ddev_config:ro'
+    echo '            - type: volume'
+    echo '              source: claude_state'
+    echo '              target: /home/claude/.claude'
+    echo 'volumes:'
+    if [[ "$RESOLVED_MOUNT" == "mutagen" ]]; then
+      echo '    project_mutagen:'
+      echo '        name: ${DDEV_SITENAME}_project_mutagen'
+      echo '        external: true'
+    fi
+    echo '    claude_state:'
+    echo '        name: ${DDEV_SITENAME}_claude_state'
+  } > "$OUT_MOUNTS"
+
+  printf '%s\n' "$RESOLVED_MOUNT" > "$OUT_MOUNT_MODE"
 }
 
 main "$@"
