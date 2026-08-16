@@ -54,6 +54,22 @@ read_list_file() {
 EXTRAS=()
 EXTRA_DOMAINS_LIST=()
 AVAILABLE_EXTRAS=()
+TOOLS=()
+PLUGINS=()
+MOUNT_MODE="auto"
+
+# Shipped defaults, applied when the corresponding key is absent entirely.
+DEFAULT_TOOLS=(Read Write Bash Skill)
+DEFAULT_PLUGINS=(superpowers code-review gitlab code-simplifier)
+DEFAULT_MARKETPLACE="claude-plugins-official"
+
+# Built-in tool names known to this release. Used for typo warnings only —
+# never to reject, because the built-in set changes between Claude Code
+# releases and a hard-coded list would break on a newer CLI.
+KNOWN_TOOLS=(
+  Bash BashOutput Edit ExitPlanMode Glob Grep KillShell NotebookEdit
+  Read Skill SlashCommand Task TodoWrite WebFetch WebSearch Write
+)
 
 # Populate AVAILABLE_EXTRAS from the *.fragment files in the extras dir.
 discover_extras() {
@@ -83,9 +99,11 @@ parse_claude_yaml() {
     if [[ "$line" =~ ^([a-zA-Z_]+):[[:space:]]*(\[[[:space:]]*\])?[[:space:]]*$ ]]; then
       key="${BASH_REMATCH[1]}"
       case "$key" in
-        extras)               current_key=extras ;;
+        extras)                current_key=extras ;;
         extra_allowed_domains) current_key=extra_domains ;;
-        *) die "unknown key '$key' in $file (line $line_no; allowed: extras, extra_allowed_domains)" ;;
+        tools)                 current_key=tools ;;
+        plugins)               current_key=plugins ;;
+        *) die "unknown key '$key' in $file (line $line_no; allowed: extras, extra_allowed_domains, tools, plugins, mount_mode)" ;;
       esac
       # `key: []` is the empty-list shorthand — no further items; reset current_key
       # so any subsequent indented list items would be detected as a parse error.
@@ -102,7 +120,27 @@ parse_claude_yaml() {
       case "$current_key" in
         extras)        EXTRAS+=("$val") ;;
         extra_domains) EXTRA_DOMAINS_LIST+=("$val") ;;
+        tools)         TOOLS+=("$val") ;;
+        plugins)       PLUGINS+=("$val") ;;
         *) die "list item without parent key in $file at line $line_no" ;;
+      esac
+      continue
+    fi
+
+    if [[ "$line" =~ ^([a-zA-Z_]+):[[:space:]]*(.+)$ ]]; then
+      key="${BASH_REMATCH[1]}"
+      val="${BASH_REMATCH[2]}"
+      val="${val#\"}"; val="${val%\"}"
+      val="${val#\'}"; val="${val%\'}"
+      case "$key" in
+        mount_mode)
+          MOUNT_MODE="$val"
+          current_key=""
+          ;;
+        extras|extra_allowed_domains|tools|plugins)
+          die "key '$key' expects a block list, got scalar value in $file at line $line_no" ;;
+        *)
+          die "unknown key '$key' in $file (line $line_no; allowed: extras, extra_allowed_domains, tools, plugins, mount_mode)" ;;
       esac
       continue
     fi
@@ -116,6 +154,32 @@ validate_extras() {
   for e in "${EXTRAS[@]+"${EXTRAS[@]}"}"; do
     _in_array "$e" "${AVAILABLE_EXTRAS[@]+"${AVAILABLE_EXTRAS[@]}"}" \
       || die "unknown extra '$e' (available: ${AVAILABLE_EXTRAS[*]:-<none>})"
+  done
+}
+
+validate_mount_mode() {
+  case "$MOUNT_MODE" in
+    auto|mutagen|bind) ;;
+    *) die "invalid mount_mode '$MOUNT_MODE' (allowed: auto, mutagen, bind)" ;;
+  esac
+}
+
+# Unrecognised names warn and pass through — see KNOWN_TOOLS.
+validate_tools() {
+  local t
+  for t in "${TOOLS[@]+"${TOOLS[@]}"}"; do
+    [[ "$t" =~ ^[A-Za-z][A-Za-z0-9_]*$ ]] \
+      || die "invalid tool name '$t' (expected an identifier such as Read)"
+    _in_array "$t" "${KNOWN_TOOLS[@]}" \
+      || log "warning: unrecognised tool '$t' — passing through to the claude CLI"
+  done
+}
+
+validate_plugins() {
+  local p
+  for p in "${PLUGINS[@]+"${PLUGINS[@]}"}"; do
+    [[ "$p" =~ ^[A-Za-z0-9_.-]+(@[A-Za-z0-9_.-]+)?$ ]] \
+      || die "invalid plugin '$p' (expected name or name@marketplace)"
   done
 }
 
@@ -198,11 +262,23 @@ write_stamp() {
   compute_stamp > "$STAMP"
 }
 
+# Absent key means the shipped default, not "unrestricted" — install.yaml does
+# not ship claude.yaml, so a missing key is the common case on a fresh install.
+apply_defaults() {
+  [[ ${#TOOLS[@]}   -eq 0 ]] && TOOLS=("${DEFAULT_TOOLS[@]}")
+  [[ ${#PLUGINS[@]} -eq 0 ]] && PLUGINS=("${DEFAULT_PLUGINS[@]}")
+  return 0
+}
+
 # Change C: main calls resolve_extras + uses RESOLVED_EXTRAS; stamp no-op
 main() {
   parse_claude_yaml "$CONFIG_FILE"
   discover_extras
   validate_extras
+  validate_mount_mode
+  validate_tools
+  validate_plugins
+  apply_defaults
   resolve_extras
 
   if stamp_matches; then

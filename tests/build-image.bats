@@ -207,3 +207,79 @@ YAML
   mtime2="$(mtime "$PROJ/.ddev/claude/Dockerfile")"
   [ "$mtime2" -gt "$mtime1" ]
 }
+
+@test "parser: mount_mode scalar is accepted" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+mount_mode: bind
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+}
+
+@test "parser: invalid mount_mode → exits non-zero with clear error" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+mount_mode: turbo
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "invalid mount_mode 'turbo'" ]]
+}
+
+@test "parser: list key given a scalar value → clear error" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+extras: php
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "expects a block list" ]]
+}
+
+@test "parser: 'extras: []' empty-list shorthand still works" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+extras: []
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+}
+
+@test "parser: tools and plugins lists are accepted" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+tools:
+  - Read
+  - Bash
+plugins:
+  - superpowers
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+}
+
+@test "parser: unrecognised tool name warns but exits 0" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+tools:
+  - Read
+  - Telepathy
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "unrecognised tool 'Telepathy'" ]]
+}
+
+@test "parser: malformed plugin name → exits non-zero" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+plugins:
+  - "bad name!"
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "invalid plugin" ]]
+}
+
+@test "parser: unknown top-level scalar key → clear error" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+nonsense: 1
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "unknown key 'nonsense'" ]]
+}
