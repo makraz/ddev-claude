@@ -24,7 +24,7 @@
 
 set -euo pipefail
 
-CONTAINER="ddev-${DDEV_SITENAME}-claude"
+CONTAINER="ddev-${DDEV_SITENAME:-}-claude"
 
 ensure_running() {
   if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
@@ -49,18 +49,73 @@ ensure_firewall() {
   docker exec "$CONTAINER" sudo /usr/local/bin/init-firewall.sh --ensure
 }
 
+# Refuse to launch against a project tree that is not actually there.
+#
+# Under Mutagen the sidecar reads the synced volume; while the sync is still
+# scanning or staging, /var/www/html is empty or half-populated and the agent
+# will confidently report that your files do not exist. A wrong answer is worse
+# than a refusal.
+ensure_workspace() {
+  local mode status
+  mode="$(cat "${DDEV_APPROOT}/.ddev/claude/.mount-mode" 2>/dev/null || echo bind)"
+
+  if [[ "$mode" == "mutagen" ]]; then
+    status="$(ddev mutagen status 2>&1 | head -1)"
+    case "$status" in
+      *scanning*|*staging*|*transitioning*|*connecting*|*problem*|*error*)
+        echo "error: project files are not ready in the sidecar" >&2
+        echo "       $status" >&2
+        echo "hint:  wait for the sync to settle, then re-run. Watch it with: ddev mutagen status" >&2
+        exit 1
+        ;;
+    esac
+    return 0
+  fi
+
+  if ! docker exec "$CONTAINER" \
+      bash -c 'ls -A /var/www/html 2>/dev/null | grep -qv -e "^\.git$" -e "^\.ddev$"'; then
+    echo "error: /var/www/html is empty in the sidecar" >&2
+    echo "hint:  check the bind mount with: ddev claude shell -c 'ls /var/www/html'" >&2
+    exit 1
+  fi
+}
+
+# Claude Code writes .credentials.json by write-temp-then-rename, which
+# replaces the inode — so a single-file bind mount would keep pointing at the
+# old inode and silently stop updating the host copy. We copy it out on exit
+# instead. Any failure here warns and is otherwise ignored: it must never
+# change the session's exit code.
+snapshot_credentials() {
+  local dest="${DDEV_APPROOT}/.ddev/.claude"
+  mkdir -p "$dest" 2>/dev/null || return 0
+  docker cp "${CONTAINER}:/home/claude/.claude/.credentials.json" \
+            "${dest}/.credentials.json" >/dev/null 2>&1 \
+    || echo "warning: could not snapshot credentials from the sidecar" >&2
+  return 0
+}
+
 launch_claude() {
   ensure_running
   ensure_firewall
+  ensure_workspace
+
   local args=()
   if [[ "${CLAUDE_SAFE:-0}" != "1" ]]; then
     args+=(--dangerously-skip-permissions)
   fi
-  exec docker exec -it \
+
+  # Deliberately NOT `exec`: we need to run snapshot_credentials afterwards.
+  trap snapshot_credentials EXIT INT TERM
+  local rc=0
+  docker exec -it \
     --user claude \
     --workdir /var/www/html \
     "$CONTAINER" \
-    claude "${args[@]}" "$@"
+    claude "${args[@]+"${args[@]}"}" "$@" || rc=$?
+  trap - EXIT INT TERM
+
+  snapshot_credentials
+  return "$rc"
 }
 
 rebuild_image() {
@@ -76,6 +131,8 @@ Usage:
   ddev claude shell [args]     Drop into bash inside the sidecar.
   ddev claude exec <cmd>       Run one command in the sidecar non-interactively.
   ddev claude rebuild          Regenerate Dockerfile from .ddev/claude.yaml.
+  ddev claude state [dir]      Copy the sidecar's ~/.claude out to a directory
+                               (default: .ddev/.claude.export).
   ddev claude help             Print this help.
   ddev claude <other args>     Pass through to the claude CLI (e.g. --resume).
 
@@ -83,6 +140,9 @@ Environment:
   CLAUDE_SAFE=1                Opt out of YOLO mode for this invocation.
   EXTRA_ALLOWED_DOMAINS=...    Space-separated extra outbound domains. Consumed
                                at container start — set before 'ddev restart'.
+
+  Tool set and plugins are fixed by .ddev/claude.yaml and baked into the image.
+  Change them with: ddev claude rebuild && ddev restart
 HELP
 }
 
@@ -95,17 +155,28 @@ case "${1:-}" in
     shift
     ensure_running
     ensure_firewall
+    ensure_workspace
     exec docker exec -it --user claude --workdir /var/www/html "$CONTAINER" bash "$@"
     ;;
   exec)
     shift
     ensure_running
     ensure_firewall
+    ensure_workspace
     exec docker exec -i --user claude --workdir /var/www/html "$CONTAINER" "$@"
     ;;
   rebuild)
     shift
     rebuild_image
+    exit 0
+    ;;
+  state)
+    shift
+    ensure_running
+    dest="${1:-${DDEV_APPROOT}/.ddev/.claude.export}"
+    mkdir -p "$dest"
+    docker cp "${CONTAINER}:/home/claude/.claude/." "$dest/"
+    echo "Copied sidecar state to $dest"
     exit 0
     ;;
   help)

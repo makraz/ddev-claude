@@ -11,6 +11,7 @@
 
 setup() {
   export DIR="$( cd "$( dirname "$BATS_TEST_FILENAME" )" >/dev/null 2>&1 && pwd )/.."
+  export REPO="$( cd "$( dirname "$BATS_TEST_FILENAME" )" >/dev/null 2>&1 && pwd )/.."
   export PROJNAME="claude-test"
   export TESTDIR="$(mktemp -d)"
   export DDEV_NONINTERACTIVE=true
@@ -328,4 +329,10 @@ YAML
 
   # Dockerfile now mentions packages.sury.org (php fragment marker)
   grep -qF 'packages.sury.org' "$TESTDIR/.ddev/claude/Dockerfile"
+}
+
+@test "host command: help mentions the state subcommand" {
+  run bash "${REPO}/commands/host/claude" help
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "ddev claude state" ]]
 }
