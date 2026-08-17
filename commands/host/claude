@@ -46,7 +46,19 @@ ensure_firewall() {
   # The allow-list is read only from root-owned files; EXTRA_ALLOWED_DOMAINS is
   # consumed once, at start, by entrypoint.sh — so set it before `ddev start` /
   # `ddev restart`.
-  docker exec "$CONTAINER" sudo /usr/local/bin/init-firewall.sh --ensure
+  #
+  # init-firewall.sh's log() helper writes to stdout even on the healthy
+  # no-op path, which would otherwise leak into the stdout of whatever
+  # command the caller is running (e.g. `ddev claude exec`). Capture its
+  # combined output ourselves and only emit it (to stderr) when the health
+  # check actually fails, so a real firewall problem still surfaces.
+  local out
+  local status=0
+  out="$(docker exec "$CONTAINER" sudo /usr/local/bin/init-firewall.sh --ensure 2>&1)" || status=$?
+  if [[ "$status" -ne 0 ]]; then
+    printf '%s\n' "$out" >&2
+  fi
+  return "$status"
 }
 
 # Refuse to launch against a project tree that is not actually there.
