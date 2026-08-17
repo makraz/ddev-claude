@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+#ddev-generated
+# ---------------------------------------------------------------------------
+# claude-shim — installed as /usr/local/bin/claude inside the sidecar.
+#
+# Injects the project's built-in tool allow-list, read from a ROOT-OWNED file
+# baked into the image at build time. Because /usr/local/bin precedes
+# /home/claude/.local/bin on PATH, this applies to EVERY entry path into the
+# container — `ddev claude`, `ddev claude shell`, `ddev exec -s claude`, and a
+# plain `docker exec` — not just the `ddev claude` host command.
+#
+# Both paths below are hardcoded on purpose. Reading either from the
+# environment would let the agent `export` its way to any tool set it liked.
+# The bats suite patches these two lines into a throwaway copy instead.
+# ---------------------------------------------------------------------------
+set -euo pipefail
+
+REAL=/home/claude/.local/bin/claude
+TOOLS_FILE=/etc/claude-sandbox/tools.list
+
+for a in "$@"; do
+  case "$a" in
+    --tools|--tools=*)
+      echo "claude: --tools is fixed by the ddev-claude sandbox." >&2
+      echo "        Edit 'tools:' in .ddev/claude.yaml, then: ddev claude rebuild && ddev restart" >&2
+      exit 64
+      ;;
+  esac
+done
+
+args=()
+if [[ -r "$TOOLS_FILE" ]]; then
+  tools="$(paste -sd, "$TOOLS_FILE")"
+  [[ -n "$tools" ]] && args+=(--tools "$tools")
+fi
+
+exec "$REAL" "${args[@]+"${args[@]}"}" "$@"

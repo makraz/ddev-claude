@@ -23,6 +23,19 @@ RUN chmod 0755 /usr/local/bin/init-firewall.sh /usr/local/bin/entrypoint.sh
 COPY extra-domains.list /etc/claude-firewall/extra-domains.list
 RUN chmod 0644 /etc/claude-firewall/extra-domains.list
 
+# Bake the tool allow-list, the plugin set and the shim at ROOT-OWNED paths
+# OUTSIDE the bind-mounted project tree — same reasoning as extra-domains.list
+# above. The agent can edit .ddev/claude.yaml (it is in the project tree), but
+# that only takes effect via `ddev claude rebuild`, under the user's control.
+COPY settings.json /etc/claude-sandbox/settings.json
+COPY tools.list    /etc/claude-sandbox/tools.list
+COPY claude-shim   /usr/local/bin/claude
+RUN chmod 0644 /etc/claude-sandbox/settings.json /etc/claude-sandbox/tools.list \
+ && chmod 0755 /usr/local/bin/claude
+
+# /usr/local/bin must precede the real binary's directory so the shim wins.
+ENV PATH="/usr/local/bin:/home/claude/.local/bin:${PATH}"
+
 # NOTE: we deliberately do NOT add `env_keep += EXTRA_ALLOWED_DOMAINS` to
 # sudoers. Preserving that env var across `sudo init-firewall.sh` would let the
 # unprivileged agent inject arbitrary domains (export it in its own shell, then
