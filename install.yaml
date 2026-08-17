@@ -102,6 +102,7 @@ removal_actions:
   - |
     # Remove addon-managed files only. User-managed files
     # (.ddev/claude.yaml, .ddev/.claude/, .ddev/claude.local/) are kept.
+    cd "${DDEV_APPROOT}"
     set -e
     rm -f .ddev/claude/Dockerfile
     rm -f .ddev/claude/extra-domains.list
