@@ -86,6 +86,7 @@ through it.
 Dropping `Edit` has a real cost: every change becomes a whole-file `Write`,
 which spends output tokens proportional to file size and risks losing unrelated
 content in large files. Add `Edit` back if that trade is wrong for your project.
+Add `Edit` to the `tools:` list in `.ddev/claude.yaml`, then `ddev claude rebuild && ddev restart`.
 
 `tools` and `plugins` are baked into the image at root-owned paths, so the agent
 cannot widen them at runtime. Changing either needs:
@@ -99,6 +100,8 @@ ddev claude rebuild && ddev restart
 | Extra | What it installs | Adds to firewall allow-list |
 | --- | --- | --- |
 | `php` | PHP 8.5 CLI + Composer + common extensions (bcmath, curl, gd, intl, mbstring, mysql, soap, xml, xsl, zip) via Ondřej Surý's apt repo. | `packagist.org`, `repo.packagist.org` |
+| `python` | CPython 3 (`python3`, `python3-venv`, `python3-pip`) from Debian's own repo, for Python-backed Claude Code plugins (e.g. `remember`, `security-guidance`). No third-party apt repo, so no additional signing key to pin and trust, unlike the `php` extra which must trust Sury. | `pypi.org`, `files.pythonhosted.org` |
+| `node` | Node.js and npm from Debian bookworm (Node 18.x), for Node-backed Claude Code plugins (e.g. `php-lsp`, `skill-creator`). Debian's own packages, for the same reason as `python`: no third-party NodeSource key to pin and trust. | `registry.npmjs.org` |
 
 Edit `.ddev/claude.yaml`, run `ddev claude rebuild` (or `ddev restart`), and the image is regenerated.
 
