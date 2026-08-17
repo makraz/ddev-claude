@@ -15,15 +15,49 @@
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
-if [[ "$(id -u)" -eq 0 ]]; then
-  # Persist the host-set EXTRA_ALLOWED_DOMAINS into a root-owned file that
-  # init-firewall.sh reads. This is the ONLY trusted channel for runtime
-  # domains: it runs as genuine root with the compose-provided env, which the
-  # unprivileged agent cannot influence. (Crucially, init-firewall.sh no longer
-  # reads EXTRA_ALLOWED_DOMAINS from its own env, so the agent cannot inject
-  # domains by exporting the var and re-running the firewall via sudo.)
-  RUNTIME_LIST=/etc/claude-firewall/runtime-domains.list
-  mkdir -p /etc/claude-firewall
+# Overridable for the bats suite; these are the real paths inside the image.
+STATE_DIR="${STATE_DIR:-/home/claude/.claude}"
+SEED_SRC="${SEED_SRC:-/mnt/ddev_config/.claude}"
+SANDBOX_SETTINGS="${SANDBOX_SETTINGS:-/etc/claude-sandbox/settings.json}"
+RUNTIME_LIST="${RUNTIME_LIST:-/etc/claude-firewall/runtime-domains.list}"
+
+# One-shot, non-destructive migration of the pre-v0.4.0 host state directory
+# into the state volume. The sentinel is written ONLY after a complete copy, so
+# a container killed mid-seed retries into a clean state on the next start.
+seed_state_dir() {
+  mkdir -p "$STATE_DIR"
+  local sentinel="$STATE_DIR/.ddev-claude-seeded"
+
+  if [[ -f "$sentinel" ]]; then
+    return 0
+  fi
+
+  if [[ -d "$SEED_SRC" ]]; then
+    echo "[entrypoint] seeding state volume from $SEED_SRC"
+    if ! cp -a "$SEED_SRC/." "$STATE_DIR/"; then
+      echo "[entrypoint] WARNING: state seed failed; will retry on next start" >&2
+      return 0
+    fi
+  fi
+
+  [[ -n "${SKIP_CHOWN:-}" ]] || chown -R 1000:1000 "$STATE_DIR"
+  : > "$sentinel"
+  [[ -n "${SKIP_CHOWN:-}" ]] || chown 1000:1000 "$sentinel"
+}
+
+# Re-assert the generated settings on EVERY start, so a plugin the agent
+# enables mid-session does not survive a restart.
+install_sandbox_settings() {
+  [[ -r "$SANDBOX_SETTINGS" ]] || return 0
+  cp "$SANDBOX_SETTINGS" "$STATE_DIR/settings.json" || {
+    echo "[entrypoint] WARNING: could not install sandbox settings" >&2
+    return 0
+  }
+  [[ -n "${SKIP_CHOWN:-}" ]] || chown 1000:1000 "$STATE_DIR/settings.json"
+}
+
+persist_runtime_domains() {
+  mkdir -p "$(dirname "$RUNTIME_LIST")"
   : > "$RUNTIME_LIST"
   chmod 0644 "$RUNTIME_LIST"
   if [[ -n "${EXTRA_ALLOWED_DOMAINS:-}" ]]; then
@@ -32,18 +66,30 @@ if [[ "$(id -u)" -eq 0 ]]; then
       printf '%s\n' "$d" >> "$RUNTIME_LIST"
     done
   fi
+}
 
-  if /usr/local/bin/init-firewall.sh; then
-    echo "[entrypoint] firewall active"
+main() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    seed_state_dir
+    install_sandbox_settings
+    persist_runtime_domains
+
+    if /usr/local/bin/init-firewall.sh; then
+      echo "[entrypoint] firewall active"
+    else
+      # Non-fatal: keep the container up so the user can inspect it. The
+      # firewall is re-asserted (idempotently) by the `ddev claude` host
+      # command, so a transient start-time failure self-heals.
+      echo "[entrypoint] WARNING: firewall init failed; will retry on 'ddev claude'" >&2
+    fi
   else
-    # Non-fatal: keep the container up so the user can inspect it. The
-    # firewall is re-asserted (idempotently) by the `ddev claude` host
-    # command, so a transient start-time failure (e.g. sibling not ready)
-    # self-heals on the next invocation.
-    echo "[entrypoint] WARNING: firewall init failed; will retry on 'ddev claude'" >&2
+    echo "[entrypoint] WARNING: not running as root; cannot activate firewall" >&2
   fi
-else
-  echo "[entrypoint] WARNING: not running as root; cannot activate firewall" >&2
-fi
 
-exec sleep infinity
+  exec sleep infinity
+}
+
+# `--source-only` lets the bats suite load the functions without running them.
+if [[ "${1:-}" != "--source-only" ]]; then
+  main "$@"
+fi
