@@ -456,3 +456,52 @@ YAML
   run "$PROJ/.ddev/claude/build-image.sh"
   [ "$(cat "$PROJ/.ddev/claude/.build-stamp")" != "$first" ]
 }
+
+@test "extras: python fragment is selectable and contributes pypi domains" {
+  cp "$REPO/claude/extras/python.fragment" "$PROJ/.ddev/claude/extras/"
+  cp "$REPO/claude/extras/python.domains"  "$PROJ/.ddev/claude/extras/"
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+extras:
+  - python
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  run grep -F 'python3' "$PROJ/.ddev/claude/Dockerfile"
+  [ "$status" -eq 0 ]
+  run grep -Fx 'pypi.org' "$PROJ/.ddev/claude/extra-domains.list"
+  [ "$status" -eq 0 ]
+}
+
+@test "extras: node fragment is selectable and contributes the npm registry" {
+  cp "$REPO/claude/extras/node.fragment" "$PROJ/.ddev/claude/extras/"
+  cp "$REPO/claude/extras/node.domains"  "$PROJ/.ddev/claude/extras/"
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+extras:
+  - node
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  run grep -Fx 'registry.npmjs.org' "$PROJ/.ddev/claude/extra-domains.list"
+  [ "$status" -eq 0 ]
+}
+
+@test "domains: a non-empty plugin list contributes marketplace hosts" {
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  run grep -Fx 'codeload.github.com' "$PROJ/.ddev/claude/extra-domains.list"
+  [ "$status" -eq 0 ]
+  run grep -Fx 'objects.githubusercontent.com' "$PROJ/.ddev/claude/extra-domains.list"
+  [ "$status" -eq 0 ]
+  run grep -Fx 'raw.githubusercontent.com' "$PROJ/.ddev/claude/extra-domains.list"
+  [ "$status" -eq 0 ]
+}
+
+@test "domains: an empty plugin list contributes no marketplace hosts" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+plugins: []
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  run grep -Fx 'codeload.github.com' "$PROJ/.ddev/claude/extra-domains.list"
+  [ "$status" -ne 0 ]
+}

@@ -1,0 +1,3 @@
+# Runtime domains for the python extra (read by init-firewall.sh).
+pypi.org
+files.pythonhosted.org

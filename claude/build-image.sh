@@ -62,6 +62,8 @@ AVAILABLE_EXTRAS=()
 TOOLS=()
 PLUGINS=()
 MOUNT_MODE="auto"
+TOOLS_SEEN=0
+PLUGINS_SEEN=0
 
 # Shipped defaults, applied when the corresponding key is absent entirely.
 DEFAULT_TOOLS=(Read Write Bash Skill)
@@ -110,9 +112,17 @@ parse_claude_yaml() {
         plugins)               current_key=plugins ;;
         *) die "unknown key '$key' in $file (line $line_no; allowed: extras, extra_allowed_domains, tools, plugins, mount_mode)" ;;
       esac
+      case "$key" in
+        tools)   TOOLS_SEEN=1 ;;
+        plugins) PLUGINS_SEEN=1 ;;
+      esac
       # `key: []` is the empty-list shorthand — no further items; reset current_key
       # so any subsequent indented list items would be detected as a parse error.
       if [[ "${BASH_REMATCH[2]:-}" == *"["* ]]; then
+        case "$key" in
+          tools)   TOOLS_SEEN=1 ;;
+          plugins) PLUGINS_SEEN=1 ;;
+        esac
         current_key=""
       fi
       continue
@@ -276,8 +286,8 @@ write_stamp() {
 # Absent key means the shipped default, not "unrestricted" — install.yaml does
 # not ship claude.yaml, so a missing key is the common case on a fresh install.
 apply_defaults() {
-  [[ ${#TOOLS[@]}   -eq 0 ]] && TOOLS=("${DEFAULT_TOOLS[@]}")
-  [[ ${#PLUGINS[@]} -eq 0 ]] && PLUGINS=("${DEFAULT_PLUGINS[@]}")
+  [[ $TOOLS_SEEN   -eq 0 ]] && TOOLS=("${DEFAULT_TOOLS[@]}")
+  [[ $PLUGINS_SEEN -eq 0 ]] && PLUGINS=("${DEFAULT_PLUGINS[@]}")
   return 0
 }
 
@@ -385,6 +395,17 @@ generate_domains_list() {
   for d in "${EXTRA_DOMAINS_LIST[@]+"${EXTRA_DOMAINS_LIST[@]}"}"; do
     echo "$d" >> "$OUT_DOMAINS"
   done
+
+  # Enabling plugins means Claude fetches them from a marketplace on first run
+  # into the (initially empty) state volume. github.com and api.github.com are
+  # already in init-firewall.sh's DEFAULT_DOMAINS; these are the hosts a
+  # GitHub-hosted marketplace redirects to for the actual payloads.
+  if [[ ${#PLUGINS[@]} -gt 0 ]]; then
+    printf '%s\n' \
+      "codeload.github.com" \
+      "objects.githubusercontent.com" \
+      "raw.githubusercontent.com" >> "$OUT_DOMAINS"
+  fi
 
   # Dedup, preserving first occurrence order.
   awk '!seen[$0]++' "$OUT_DOMAINS" > "${OUT_DOMAINS}.tmp" && mv "${OUT_DOMAINS}.tmp" "$OUT_DOMAINS"
