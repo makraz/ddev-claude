@@ -6,6 +6,43 @@ All notable changes to this add-on are documented here. This project adheres to
 
 ## [Unreleased]
 
+## [v0.4.0-beta.1] — 2026-08-16
+
+### Changed — BREAKING
+- The agent's built-in tool set is now restricted. With no `tools:` key in
+  `.ddev/claude.yaml`, the default is `Read`, `Write`, `Bash`, `Skill` —
+  `Edit`, `Grep`, `Glob`, `Task`, `WebFetch`, `WebSearch`, `NotebookEdit`,
+  `TodoWrite`, `SlashCommand` and all MCP tools are off. Existing projects with
+  no `tools:` key are affected on upgrade. Add a `tools:` list to opt back in.
+  The restriction is baked into the image and enforced by a `claude` shim on
+  `PATH`, so it applies to `ddev claude shell` and direct `docker exec` too.
+- Plugins are now curated. With no `plugins:` key the default is `superpowers`,
+  `code-review`, `gitlab`, `code-simplifier` — the interpreter-free set. This
+  fixes the `FATAL: No working Python found` that Python-backed plugins
+  (`remember`, `security-guidance`) emitted on every `PostToolUse` hook, since
+  the image ships no Python by design.
+- Claude's state moved from `.ddev/.claude/` to a Docker volume
+  (`${DDEV_SITENAME}_claude_state`). It is seeded from the old directory on
+  first start; the old directory is left in place. `ddev claude state` copies
+  the volume back out. `ddev add-on remove claude` does not delete the volume.
+
+### Added
+- `python` and `node` extras, for projects that want the Python- or Node-backed
+  plugins. Both install from Debian's own repositories, so neither adds a
+  third-party apt signing key to trust.
+- `tools:`, `plugins:` and `mount_mode:` keys in `.ddev/claude.yaml`.
+  `mount_mode` is the first scalar key the parser accepts.
+- `ddev claude state [dir]` — copy the sidecar's `~/.claude` out to a directory.
+- `docs/PERFORMANCE.md`, with the measurements and a reproducible benchmark.
+
+### Fixed
+- The sidecar no longer bind-mounts the project from the host when Mutagen is
+  enabled. It now shares `web`'s synced volume, which measured ~20× faster on a
+  `grep` over `vendor/` and ~13× on a `find`. Set `mount_mode: bind` to opt out.
+- `ddev claude` refuses to start while the Mutagen sync is still staging.
+  Previously the agent saw an empty or half-populated `/var/www/html` and
+  reported that files did not exist.
+
 ## [v0.3.0-beta.3] — 2026-06-18
 
 ### Security

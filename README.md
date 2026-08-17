@@ -53,22 +53,46 @@ Set on your host shell before `ddev start` / `ddev restart`. The sidecar's `dock
 | `PLAYWRIGHT_BASE_URL` | `https://web` | Pre-set inside the container so Playwright/MCP fragments added via the escape hatch hit the DDEV `web` service by default. Override on the host shell if needed. |
 | `CLAUDE_SAFE` | `0` | Read by the `ddev claude` host command. Set to `1` to opt out of YOLO mode for a single invocation (equivalent to `ddev claude safe`). |
 
+## Performance
+
+When Mutagen is enabled the sidecar reads the project through DDEV's synced
+Docker volume rather than a host bind mount — roughly 20× faster on
+content-heavy operations like a `grep` over `vendor/`. See
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md) for the measurements and how to
+reproduce them.
+
+`ddev claude` refuses to start while the Mutagen sync is still staging, because
+an agent pointed at a half-synced tree reports that your files do not exist.
+
 ## Configuration
 
-Per-project configuration lives in `.ddev/claude.yaml` (user-editable):
+`.ddev/claude.yaml` accepts five keys. Block-style lists only; `extras: [php]`
+is a parse error.
 
-```yaml
-# Available extras: php
-extras:
-  - php
+| Key                     | Type   | Default                                              |
+| ----------------------- | ------ | ---------------------------------------------------- |
+| `extras`                | list   | none — available: `php`, `python`, `node`             |
+| `extra_allowed_domains` | list   | none                                                  |
+| `tools`                 | list   | `Read`, `Write`, `Bash`, `Skill`                      |
+| `plugins`               | list   | `superpowers`, `code-review`, `gitlab`, `code-simplifier` |
+| `mount_mode`            | scalar | `auto` — also `mutagen`, `bind`                       |
 
-# Additional outbound domains the runtime firewall should allow.
-extra_allowed_domains:
-  - sentry.io
-  - api.stripe.com
+`tools` is an allow-list over Claude Code's built-in tool set. The default
+deliberately excludes `Edit`, `Grep`, `Glob`, `Task`, `WebFetch`, `WebSearch`,
+`NotebookEdit`, `TodoWrite` and `SlashCommand`, and all MCP tools. `Skill` is
+included because `superpowers` is enabled by default and exists to be invoked
+through it.
+
+Dropping `Edit` has a real cost: every change becomes a whole-file `Write`,
+which spends output tokens proportional to file size and risks losing unrelated
+content in large files. Add `Edit` back if that trade is wrong for your project.
+
+`tools` and `plugins` are baked into the image at root-owned paths, so the agent
+cannot widen them at runtime. Changing either needs:
+
+```bash
+ddev claude rebuild && ddev restart
 ```
-
-If the file is absent or both lists are empty, the sidecar is built minimum-viable.
 
 ### Available extras
 
