@@ -73,15 +73,23 @@ ensure_workspace() {
 
   if [[ "$mode" == "mutagen" ]]; then
     status="$(ddev mutagen status 2>&1 | head -1)"
+    # Allow-list, not deny-list: DDEV's mutagen status vocabulary can gain or
+    # rename states (initializing, halted, paused, waiting, ...) that this
+    # guard has never seen. A deny-list would silently pass on any of those
+    # and let the agent report confidently on a half-synced tree. Only the
+    # one verified settled state passes here; everything else refuses.
     case "$status" in
-      *scanning*|*staging*|*transitioning*|*connecting*|*problem*|*error*)
+      *watching*)
+        return 0
+        ;;
+      *)
         echo "error: project files are not ready in the sidecar" >&2
         echo "       $status" >&2
         echo "hint:  wait for the sync to settle, then re-run. Watch it with: ddev mutagen status" >&2
+        echo "hint:  or set mount_mode: bind in .ddev/claude.yaml to skip the Mutagen check entirely" >&2
         exit 1
         ;;
     esac
-    return 0
   fi
 
   if ! docker exec "$CONTAINER" \
@@ -97,7 +105,22 @@ ensure_workspace() {
 # old inode and silently stop updating the host copy. We copy it out on exit
 # instead. Any failure here warns and is otherwise ignored: it must never
 # change the session's exit code.
+#
+# launch_claude both traps this on EXIT/INT/TERM (to cover an interrupt while
+# docker exec is in the foreground) and calls it explicitly after the trap is
+# cleared (to cover the normal exit path). On an interrupt bash runs the trap
+# and then *resumes* the script, so both paths fire for the same session —
+# this flag makes the body idempotent. Plain global, not local, so it
+# survives being set by the trap invocation and checked again by the
+# explicit call.
+_credentials_snapshotted=0
+
 snapshot_credentials() {
+  if [[ "$_credentials_snapshotted" == "1" ]]; then
+    return 0
+  fi
+  _credentials_snapshotted=1
+
   local dest="${DDEV_APPROOT}/.ddev/.claude"
   mkdir -p "$dest" 2>/dev/null || return 0
   docker cp "${CONTAINER}:/home/claude/.claude/.credentials.json" \
