@@ -42,6 +42,19 @@ All notable changes to this add-on are documented here. This project adheres to
 - `ddev claude` refuses to start while the Mutagen sync is still staging.
   Previously the agent saw an empty or half-populated `/var/www/html` and
   reported that files did not exist.
+- The Mutagen-synced volume above is populated with real POSIX ownership from
+  the host (files `0600`, directories `0700`, owned by the host uid) — unlike
+  the bind mount it replaced, which always presented files as owned by
+  whichever container user accessed them. Without a matching uid, the agent
+  (uid 1000) could not read, write, or even traverse the project at all.
+  `entrypoint.sh` now remaps the `claude` user to the host's uid/gid
+  (`DDEV_UID`/`DDEV_GID`, forwarded from `docker-compose.claude.yaml`) at
+  every container start, mirroring what DDEV's own `web` container already
+  does. The remap never targets uid/gid 0 and is skipped, with a warning, if
+  the target uid/gid is already taken by a different account in the
+  container. `ddev claude`'s workspace-readiness check now also probes as the
+  agent (`--user claude`), not root, on every mount mode, so this class of
+  regression cannot pass silently again.
 
 ## [v0.3.0-beta.3] — 2026-06-18
 

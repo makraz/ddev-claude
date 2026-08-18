@@ -8,7 +8,10 @@ Source of the pre-built sidecar image published to
 - `debian:bookworm-slim` base
 - `ca-certificates curl git bash sudo iptables ipset dnsmasq dnsutils iproute2`
 - An unprivileged `claude` user (uid 1000) with a NOPASSWD sudoers entry
-  scoped to `/usr/local/bin/init-firewall.sh`
+  scoped to `/usr/local/bin/init-firewall.sh`. `entrypoint.sh` (outside this
+  image — see below) remaps this user to the host's uid/gid at container
+  start; the invariant this image provides is "unprivileged, never root", not
+  the literal number 1000
 - The Claude Code native binary at `/home/claude/.local/bin/claude`
 
 ## What's NOT inside

@@ -175,7 +175,7 @@ A `claude` sidecar built from a pre-built multi-arch base image (`ghcr.io/makraz
 - Claude Code CLI (native binary, installed at image build time and version-pinned per release).
 - `git`, `bash`, `sudo`, `curl`, `ca-certificates`.
 - `iptables`, `ipset`, `dnsmasq`, `dnsutils`, `iproute2` for the firewall stack.
-- The unprivileged `claude` user (uid 1000) with a NOPASSWD sudoers entry scoped to `/usr/local/bin/init-firewall.sh`.
+- The unprivileged `claude` user (uid 1000 in the base image, remapped to the host's uid/gid at container start — see below) with a NOPASSWD sudoers entry scoped to `/usr/local/bin/init-firewall.sh`.
 
 An outbound firewall (default-DROP policy) that allows only:
 
@@ -244,7 +244,7 @@ gh release create v0.3.0-beta.1 --prerelease --notes-file release-notes.md
 - **No IPv6**: dropped entirely. Extend `init-firewall.sh` if dual-stack is required.
 - **DNS open on port 53**: required for dnsmasq upstreams; a determined agent could in theory use DNS tunneling for exfiltration.
 - **`.git` and `.env*` are bind-mounted**: the agent can read (and potentially commit) anything in your project directory. Keep secrets out of the working tree, or use `CLAUDE_SAFE=1` for untrusted tasks.
-- **UID 1000 hardcoded**: the `claude` user inside the container is uid 1000. If your host user uses a different uid, file ownership may look unusual on `.ddev/.claude/`.
+- **Agent uid is remapped to the host's, never root**: the `claude` user is built at uid 1000 in the base image, but `entrypoint.sh` remaps it to `DDEV_UID`/`DDEV_GID` (the host user's uid/gid, as DDEV's own `web` container also uses) at every container start — this is what lets the agent actually read/write the project under a Mutagen-synced volume, which DDEV populates with host ownership. The remap never targets uid/gid 0, and is skipped (with a warning) if the target uid/gid already belongs to a different account in the container.
 - **`.ddev/.claude/` holds auth state**: a determined agent could plant configuration there (e.g. a malicious MCP entry in `~/.claude/settings.json`) that runs in the next session. Such code still runs under the same firewall + uid, so it cannot break out, but the persistence vector is real.
 
 ## Removing
