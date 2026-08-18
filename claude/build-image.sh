@@ -273,6 +273,7 @@ stamp_matches() {
   [[ -f "$OUT_TOOLS" ]] || return 1
   [[ -f "$OUT_SETTINGS" ]] || return 1
   [[ -f "$OUT_MOUNTS" ]] || return 1
+  [[ -f "$OUT_MOUNT_MODE" ]] || return 1
   local now then
   now="$(compute_stamp)"
   then="$(cat "$STAMP")"

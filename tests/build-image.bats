@@ -505,3 +505,17 @@ YAML
   run grep -Fx 'codeload.github.com' "$PROJ/.ddev/claude/extra-domains.list"
   [ "$status" -ne 0 ]
 }
+
+@test "stamp: deleting .mount-mode alone forces regeneration" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+mount_mode: mutagen
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  [ -f "$PROJ/.ddev/claude/.mount-mode" ]
+  rm -f "$PROJ/.ddev/claude/.mount-mode"
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  [ -f "$PROJ/.ddev/claude/.mount-mode" ]
+  [ "$(cat "$PROJ/.ddev/claude/.mount-mode")" = "mutagen" ]
+}
