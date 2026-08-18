@@ -43,4 +43,6 @@ jobs:
       - name: Run tests
         run: |
           bats tests/build-image.bats
+          bats tests/shim.bats
+          bats tests/entrypoint.bats
           bats tests/test.bats

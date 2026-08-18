@@ -29,6 +29,12 @@ services:
             - GITHUB_PERSONAL_ACCESS_TOKEN
             - GH_TOKEN=${GITHUB_PERSONAL_ACCESS_TOKEN:-}
             - EXTRA_ALLOWED_DOMAINS
+            # DDEV always sets these to the host user's uid/gid (e.g. 501/20 on
+            # macOS). entrypoint.sh remaps the `claude` user to match at start,
+            # so the agent has real POSIX access to project files under the
+            # Mutagen-synced volume, which DDEV populates with host ownership.
+            - DDEV_UID
+            - DDEV_GID
         cap_add:
             - NET_ADMIN
             - NET_RAW
