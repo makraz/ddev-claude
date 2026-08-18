@@ -295,9 +295,15 @@ apply_defaults() {
 # Echo the value of an uncommented top-level `performance_mode:` key, or
 # nothing. Anchored at column 0, so commented lines never match.
 read_performance_mode() {
-  local f="$1"
+  local f="$1" pm
   [[ -f "$f" ]] || return 0
-  sed -n 's/^performance_mode:[[:space:]]*"\{0,1\}\([A-Za-z]*\)"\{0,1\}[[:space:]]*$/\1/p' "$f" | tail -1
+  pm="$(sed -n 's/^performance_mode:[[:space:]]*"\{0,1\}\([A-Za-z]*\)"\{0,1\}[[:space:]]*$/\1/p' "$f" | tail -1)"
+  # DDEV documents `performance_mode: global` as "defer to the global config" —
+  # treat it exactly like an absent/empty value so resolve_mount_mode's caller
+  # falls through to the global config and then the OS default, instead of
+  # tripping the `!= mutagen` branch and silently resolving to bind.
+  [[ "$pm" == "global" ]] && pm=""
+  printf '%s\n' "$pm"
 }
 
 # Resolution order mirrors DDEV's own: claude.yaml → project config →

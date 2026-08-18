@@ -506,6 +506,16 @@ YAML
   [ "$status" -ne 0 ]
 }
 
+@test "mount: auto treats project performance_mode 'global' as deferring to the global config" {
+  printf 'name: demo\nperformance_mode: global\n' > "$PROJ/.ddev/config.yaml"
+  export DDEV_GLOBAL_DIR="$PROJ/fake-global"
+  mkdir -p "$DDEV_GLOBAL_DIR"
+  printf 'performance_mode: mutagen\n' > "$DDEV_GLOBAL_DIR/global_config.yaml"
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$PROJ/.ddev/claude/.mount-mode")" = "mutagen" ]
+}
+
 @test "stamp: deleting .mount-mode alone forces regeneration" {
   cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
 mount_mode: mutagen
