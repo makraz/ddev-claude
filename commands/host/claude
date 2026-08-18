@@ -98,6 +98,28 @@ ensure_workspace() {
     echo "hint:  check the bind mount with: ddev claude shell -c 'ls /var/www/html'" >&2
     exit 1
   fi
+
+  # The check above runs as ROOT (no --user claude) and only proves files
+  # exist in the container's view of /var/www/html. It says nothing about
+  # whether the unprivileged agent can actually open them. This is not a
+  # theoretical gap: under Mutagen, DDEV populates the synced volume with
+  # real POSIX ownership/mode from the host (files 0600, dirs 0700, owned by
+  # the host uid) — a fully-settled sync is exactly the state that silently
+  # locked the agent out entirely before entrypoint.sh started remapping the
+  # `claude` user to the host's uid/gid. Probe as the agent, on every mount
+  # mode (bind included — a misconfigured remap can break that path too),
+  # so a permission regression never reads as "workspace ready".
+  if ! docker exec --user claude "$CONTAINER" \
+      bash -c 'find /var/www/html -mindepth 1 -maxdepth 2 -type f -readable -print -quit 2>/dev/null | grep -q .'; then
+    local agent_id
+    agent_id="$(docker exec --user claude "$CONTAINER" id 2>&1)"
+    echo "error: the agent cannot read any project files in the sidecar" >&2
+    echo "       docker exec --user claude $CONTAINER id -> $agent_id" >&2
+    echo "hint:  this looks like a uid/gid mismatch between the host and the 'claude'" >&2
+    echo "       user. Check DDEV_UID/DDEV_GID reach the container (docker exec $CONTAINER" >&2
+    echo "       env | grep DDEV_) and that entrypoint.sh's remap ran (docker logs $CONTAINER)." >&2
+    exit 1
+  fi
 }
 
 # Claude Code writes .credentials.json by write-temp-then-rename, which
