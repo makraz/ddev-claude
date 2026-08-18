@@ -94,10 +94,13 @@ in_sidecar() {
   [ "$status" -eq 0 ]
   [ "$output" != "000" ]
 
-  # 4. agent runs as uid 1000
+  # 4. agent is never root, and matches the host uid where the test
+  # environment makes that knowable (the uid running `ddev`/bats here IS the
+  # host uid DDEV forwards as DDEV_UID, so it is knowable and asserted).
   run docker exec --user claude "ddev-${PROJNAME}-claude" id -u
   [ "$status" -eq 0 ]
-  [ "$output" = "1000" ]
+  [ "$output" != "0" ]
+  [ "$output" = "$(id -u)" ]
 
   # 5. host home paths leak nowhere
   run docker exec --user claude "ddev-${PROJNAME}-claude" sh -c 'ls /Users 2>/dev/null; ls /home/'"$USER"' 2>/dev/null'
@@ -292,13 +295,27 @@ YAML
   [[ "$output" =~ "ddev claude rebuild" ]]
 }
 
-@test "cli: ddev claude exec runs in sidecar as uid 1000" {
+@test "cli: ddev claude exec runs in sidecar as an unprivileged, host-matching uid" {
   install_addon
   ddev restart >/dev/null
 
   run ddev claude exec id -u
   [ "$status" -eq 0 ]
-  [ "$output" = "1000" ]
+  [ "$output" != "0" ]
+  [ "$output" = "$(id -u)" ]
+}
+
+@test "cli: ddev claude exec can read and write a file under /var/www/html" {
+  install_addon
+  ddev restart >/dev/null
+
+  # This is the property that silently broke under Mutagen: DDEV populates
+  # the synced volume with host ownership at mode 0600/0700, so a container
+  # user whose uid does not match the host's gets Permission denied on
+  # read, write, AND traversal, even though root can see the files fine.
+  run ddev claude exec sh -c 'echo hello > .ddev-claude-rw-probe && cat .ddev-claude-rw-probe && rm .ddev-claude-rw-probe'
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "hello" ]]
 }
 
 @test "cli: ddev claude exec propagates exit codes" {
