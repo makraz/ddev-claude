@@ -173,6 +173,24 @@ log "host gateway: $HOST_GATEWAY"
 ipset add allowed-ipv4 "$HOST_GATEWAY" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
+# DNS upstreams — the ONLY destinations allowed on port 53.
+#
+# Declared once and consumed twice: by the iptables rules below and by the
+# generated dnsmasq config further down. Keeping one list is the point — if the
+# two drifted, either DNS would break or port 53 would stay wider than the
+# resolvers actually in use.
+#
+# 127.0.0.11 (Docker's embedded DNS) is reached over loopback, which already has
+# a blanket ACCEPT, so it needs no port-53 rule of its own; it is listed here
+# only because dnsmasq needs it as a `server=`.
+DNS_UPSTREAMS=(
+  "127.0.0.11"
+  "$HOST_GATEWAY"
+  "1.1.1.1"
+  "8.8.8.8"
+)
+
+# ---------------------------------------------------------------------------
 # Local docker subnets — detect every non-default route and allow it.
 # This catches ddev's internal network so the sidecar can reach `web`,
 # `db`, `mailpit`, etc. without hardcoding subnets.
@@ -207,9 +225,20 @@ iptables -A OUTPUT -o lo -j ACCEPT
 iptables -A INPUT  -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-# DNS (so dnsmasq can reach its upstreams)
-iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
-iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
+# DNS — restricted to the known upstreams, NOT open to every host.
+#
+# A blanket `--dport 53 -j ACCEPT` (which this was until v0.4.0) is a full
+# bidirectional egress channel to any host listening on 53: DNS tunnelling, or
+# just a raw socket to attacker:53. That defeated the allow-list for anyone
+# willing to run a resolver. Everything else still goes through the ipset.
+for _ns in "${DNS_UPSTREAMS[@]}"; do
+  [[ -n "$_ns" ]] || continue
+  # Loopback (127/8, incl. Docker's 127.0.0.11) is already accepted above.
+  case "$_ns" in 127.*) continue ;; esac
+  iptables -A OUTPUT -p udp -d "$_ns" --dport 53 -j ACCEPT
+  iptables -A OUTPUT -p tcp -d "$_ns" --dport 53 -j ACCEPT
+done
+unset _ns
 
 # Outbound allow-list (domain IPs, populated by dnsmasq)
 iptables -A OUTPUT -m set --match-set allowed-ipv4 dst -j ACCEPT
@@ -266,10 +295,10 @@ if command -v dnsmasq >/dev/null; then
     echo "listen-address=127.0.0.1"
     echo "bind-interfaces"
     echo "no-resolv"
-    echo "server=127.0.0.11"       # Docker embedded DNS (ddev internal)
-    echo "server=${HOST_GATEWAY}"  # host fallback
-    echo "server=1.1.1.1"          # public fallback
-    echo "server=8.8.8.8"
+    # Same list the port-53 iptables rules were built from — see DNS_UPSTREAMS.
+    for _ns in "${DNS_UPSTREAMS[@]}"; do
+      [[ -n "$_ns" ]] && echo "server=${_ns}"
+    done
     for d in "${ALL_DOMAINS[@]}"; do
       echo "ipset=/${d}/allowed-ipv4"
     done
