@@ -80,7 +80,9 @@ ensure_workspace() {
     # one verified settled state passes here; everything else refuses.
     case "$status" in
       *watching*)
-        return 0
+        # Settled — fall through to the readability probes below. Returning
+        # here would skip them on the ONLY topology where the uid lockout can
+        # occur, which is exactly the regression they exist to catch.
         ;;
       *)
         echo "error: project files are not ready in the sidecar" >&2
@@ -95,7 +97,7 @@ ensure_workspace() {
   if ! docker exec "$CONTAINER" \
       bash -c 'ls -A /var/www/html 2>/dev/null | grep -qv -e "^\.git$" -e "^\.ddev$"'; then
     echo "error: /var/www/html is empty in the sidecar" >&2
-    echo "hint:  check the bind mount with: ddev claude shell -c 'ls /var/www/html'" >&2
+    echo "hint:  inspect it with: ddev claude shell -c 'ls /var/www/html'" >&2
     exit 1
   fi
 
