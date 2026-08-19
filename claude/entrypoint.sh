@@ -19,7 +19,6 @@ set -uo pipefail
 # Overridable for the bats suite; these are the real paths inside the image.
 STATE_DIR="${STATE_DIR:-/home/claude/.claude}"
 SEED_SRC="${SEED_SRC:-/mnt/ddev_config/.claude}"
-SANDBOX_SETTINGS="${SANDBOX_SETTINGS:-/etc/claude-sandbox/settings.json}"
 RUNTIME_LIST="${RUNTIME_LIST:-/etc/claude-firewall/runtime-domains.list}"
 
 # Remap the `claude` user/group to the host's uid/gid (DDEV_UID/DDEV_GID,
@@ -142,17 +141,21 @@ seed_state_dir() {
   [[ -n "${SKIP_CHOWN:-}" ]] || chown claude:claude "$sentinel"
 }
 
-# Re-assert the generated settings on EVERY start, so a plugin the agent
-# enables mid-session does not survive a restart.
-install_sandbox_settings() {
-  [[ -r "$SANDBOX_SETTINGS" ]] || return 0
-  cp "$SANDBOX_SETTINGS" "$STATE_DIR/settings.json" || {
-    echo "[entrypoint] WARNING: could not install sandbox settings" >&2
-    return 0
-  }
-  [[ -n "${SKIP_CHOWN:-}" ]] || chown claude:claude "$STATE_DIR/settings.json"
-}
+# NOTE: the curated plugin set is NOT written into $STATE_DIR/settings.json.
+# An earlier version copied the generated file over it on every start, which
+# silently destroyed the user's own model / hooks / statusline / env settings —
+# the generated file contains only `enabledPlugins`. The shim now passes
+# `--settings /etc/claude-sandbox/settings.json` instead, layering the plugin
+# set on per invocation and leaving the user's file alone. A plugin the agent
+# enables mid-session still does not survive the next launch, which was the
+# reason for re-asserting it in the first place.
 
+# Persist the host-set EXTRA_ALLOWED_DOMAINS into a root-owned file that
+# init-firewall.sh reads. This is the ONLY trusted channel for runtime
+# domains: it runs as genuine root with the compose-provided env, which the
+# unprivileged agent cannot influence. (Crucially, init-firewall.sh does not
+# read EXTRA_ALLOWED_DOMAINS from its own env, so the agent cannot inject
+# domains by exporting the var and re-running the firewall via sudo.)
 persist_runtime_domains() {
   mkdir -p "$(dirname "$RUNTIME_LIST")"
   : > "$RUNTIME_LIST"
@@ -169,7 +172,6 @@ main() {
   if [[ "$(id -u)" -eq 0 ]]; then
     remap_user_to_host
     seed_state_dir
-    install_sandbox_settings
     persist_runtime_domains
 
     if /usr/local/bin/init-firewall.sh; then

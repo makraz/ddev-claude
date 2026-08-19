@@ -9,10 +9,8 @@ setup() {
   export T="$(mktemp -d)"
   export STATE_DIR="$T/state"
   export SEED_SRC="$T/seed"
-  export SANDBOX_SETTINGS="$T/settings.json"
   export SKIP_CHOWN=1
   mkdir -p "$STATE_DIR" "$SEED_SRC"
-  printf '{"enabledPlugins":{}}\n' > "$SANDBOX_SETTINGS"
 }
 
 teardown() {
@@ -23,7 +21,6 @@ run_seed() {
   # shellcheck disable=SC1090
   source "$REPO/claude/entrypoint.sh" --source-only
   seed_state_dir
-  install_sandbox_settings
 }
 
 @test "entrypoint: seeds an empty state dir from the host copy" {
@@ -49,15 +46,19 @@ run_seed() {
   [ -f "$STATE_DIR/.ddev-claude-seeded" ]
 }
 
-@test "entrypoint: installs sandbox settings on every start" {
-  printf '{"enabledPlugins":{"x@y":true}}\n' > "$SANDBOX_SETTINGS"
+@test "entrypoint: does NOT overwrite the user's own settings.json" {
+  # Regression guard. An earlier version copied the generated file (which
+  # contains ONLY enabledPlugins) over the user's settings.json on every start,
+  # silently destroying their model / hooks / statusline / env preferences.
+  # The curated plugin set is now layered on by the shim via `--settings`
+  # instead, so the entrypoint must leave this file completely alone.
   : > "$STATE_DIR/.ddev-claude-seeded"
-  printf '{"tampered":true}\n' > "$STATE_DIR/settings.json"
+  printf '{"model":"opus","statusLine":{"type":"command"}}\n' > "$STATE_DIR/settings.json"
   run run_seed
   [ "$status" -eq 0 ]
   run cat "$STATE_DIR/settings.json"
-  [[ "$output" =~ '"x@y":true' ]]
-  [[ ! "$output" =~ tampered ]]
+  [[ "$output" =~ '"model":"opus"' ]]
+  [[ "$output" =~ statusLine ]]
 }
 
 # ---------------------------------------------------------------------------

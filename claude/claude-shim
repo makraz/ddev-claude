@@ -3,20 +3,32 @@
 # ---------------------------------------------------------------------------
 # claude-shim — installed as /usr/local/bin/claude inside the sidecar.
 #
-# Injects the project's built-in tool allow-list, read from a ROOT-OWNED file
-# baked into the image at build time. Because /usr/local/bin precedes
-# /home/claude/.local/bin on PATH, this applies to EVERY entry path into the
-# container — `ddev claude`, `ddev claude shell`, `ddev exec -s claude`, and a
-# plain `docker exec` — not just the `ddev claude` host command.
+# Injects the project's built-in tool allow-list and its curated plugin set,
+# both read from ROOT-OWNED files baked into the image at build time. Because
+# /usr/local/bin precedes /home/claude/.local/bin on PATH, this applies on
+# every normal entry path — `ddev claude`, `ddev claude shell`,
+# `ddev exec -s claude`, and a plain `docker exec`.
 #
-# Both paths below are hardcoded on purpose. Reading either from the
-# environment would let the agent `export` its way to any tool set it liked.
-# The bats suite patches these two lines into a throwaway copy instead.
+# This is a DEFAULT and a COST CONTROL, not a containment boundary. Two things
+# bypass it by design, and that is accepted:
+#   - a LOGIN shell (`bash -l`, `su - claude`) sources /home/claude/.profile,
+#     which prepends ~/.local/bin to PATH and so finds the real binary first;
+#   - `Bash` is in the default tool set, so the agent can invoke
+#     /home/claude/.local/bin/claude directly whenever it wants.
+# The shim runs as the same uid as the agent, so no arrangement here could
+# prevent that. The real boundaries are elsewhere: the egress firewall, the
+# unprivileged uid, and the root-owned files under /etc/claude-sandbox.
+#
+# The paths below are hardcoded on purpose. Reading them from the environment
+# would let the agent `export` its way to a different tool set without even
+# needing the bypasses above. The bats suite patches these lines into a
+# throwaway copy instead.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
 REAL=/home/claude/.local/bin/claude
 TOOLS_FILE=/etc/claude-sandbox/tools.list
+SETTINGS_FILE=/etc/claude-sandbox/settings.json
 
 for a in "$@"; do
   case "$a" in
@@ -32,6 +44,16 @@ args=()
 if [[ -r "$TOOLS_FILE" ]]; then
   tools="$(paste -sd, "$TOOLS_FILE")"
   [[ -n "$tools" ]] && args+=(--tools "$tools")
+fi
+
+# Layer the curated plugin set on at launch rather than writing it into the
+# agent's own ~/.claude/settings.json. Overwriting that file would destroy the
+# user's model, hooks, statusline and env preferences on every container start.
+# `--settings` loads additional settings for this invocation only, so the
+# user's settings.json is never touched, and a plugin the agent enables
+# mid-session still does not survive the next launch.
+if [[ -r "$SETTINGS_FILE" ]]; then
+  args+=(--settings "$SETTINGS_FILE")
 fi
 
 exec "$REAL" "${args[@]+"${args[@]}"}" "$@"

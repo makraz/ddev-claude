@@ -16,12 +16,14 @@ STUB
 
   mkdir -p "$SANDBOX/etc"
   export TOOLS_FILE="$SANDBOX/etc/tools.list"
+  export SETTINGS_FILE="$SANDBOX/etc/settings.json"
 
   # The shim reads NOTHING from the environment — an agent inside the container
   # could set such a variable and hand itself any tool set. Tests therefore
   # patch the two hardcoded paths into a throwaway copy instead.
   sed -e "s#^REAL=.*#REAL=$SANDBOX/real/claude#" \
       -e "s#^TOOLS_FILE=.*#TOOLS_FILE=$TOOLS_FILE#" \
+      -e "s#^SETTINGS_FILE=.*#SETTINGS_FILE=$SETTINGS_FILE#" \
       "$REPO/claude/claude-shim" > "$SANDBOX/claude"
   chmod 0755 "$SANDBOX/claude"
 }
@@ -80,4 +82,23 @@ Read,Bash
   [ "$status" -eq 0 ]
   [ "$output" = "--tools
 Read" ]
+}
+
+# The curated plugin set is layered on per invocation via --settings rather than
+# written into the agent's own ~/.claude/settings.json, which an earlier version
+# overwrote on every container start, destroying the user's own preferences.
+@test "shim: injects --settings when the sandbox settings file exists" {
+  printf 'Read\n' > "$TOOLS_FILE"
+  printf '{"enabledPlugins":{}}\n' > "$SETTINGS_FILE"
+  run "$SANDBOX/claude"
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "--settings" ]]
+  [[ "$output" =~ "$SETTINGS_FILE" ]]
+}
+
+@test "shim: omits --settings when the sandbox settings file is absent" {
+  printf 'Read\n' > "$TOOLS_FILE"
+  run "$SANDBOX/claude"
+  [ "$status" -eq 0 ]
+  [[ ! "$output" =~ "--settings" ]]
 }
