@@ -65,65 +65,45 @@ run_seed() {
 # remap_user_to_host
 #
 # There is no real `claude` system user (or root) on the test host, so `id`,
-# `getent`, `usermod`, `groupmod`, `chown` are stubbed via a PATH directory
-# that shadows the real binaries and logs every invocation to $CALL_LOG. This
-# exercises the function's decision logic (no-op conditions, collision
-# detection, which commands run with which arguments) without requiring an
-# actual root/container environment.
+# `getent`, `usermod`, `groupmod`, `chown` are stubbed as SHELL FUNCTIONS,
+# not as executables on PATH. entrypoint.sh deliberately pins PATH to a fixed
+# safe list before doing any root-side work (an agent-writable directory sits
+# ahead of /usr/bin on the image's default PATH, so a planted `usermod` would
+# otherwise be executed by PID 1 as root). A PATH-based stub would be wiped by
+# that pin — and weakening the pin to make tests work would reintroduce the
+# vulnerability. Bash resolves function names before PATH, so functions stub
+# cleanly and the security property stays absolute.
 # ---------------------------------------------------------------------------
 setup_remap_stubs() {
-  export STUB_BIN="$T/stubbin"
   export CALL_LOG="$T/calls.log"
-  mkdir -p "$STUB_BIN"
   : > "$CALL_LOG"
 
-  cat > "$STUB_BIN/id" <<'EOF'
-#!/usr/bin/env bash
-if [[ "$1" == "-u" && "$2" == "claude" ]]; then
-  echo "${FAKE_CURRENT_UID:-1000}"
-  exit 0
-fi
-if [[ "$1" == "-g" && "$2" == "claude" ]]; then
-  echo "${FAKE_CURRENT_GID:-1000}"
-  exit 0
-fi
-echo "0"
-EOF
+  id() {
+    if [[ "${1:-}" == "-u" && "${2:-}" == "claude" ]]; then
+      echo "${FAKE_CURRENT_UID:-1000}"; return 0
+    fi
+    if [[ "${1:-}" == "-g" && "${2:-}" == "claude" ]]; then
+      echo "${FAKE_CURRENT_GID:-1000}"; return 0
+    fi
+    echo "0"
+  }
 
-  cat > "$STUB_BIN/getent" <<'EOF'
-#!/usr/bin/env bash
-db="$1"; key="$2"
-if [[ "$db" == "passwd" && -n "${FAKE_UID_COLLISION_ID:-}" && "$key" == "$FAKE_UID_COLLISION_ID" ]]; then
-  echo "${FAKE_UID_COLLISION_NAME}:x:$key:$key::/home/x:/bin/bash"
-  exit 0
-fi
-if [[ "$db" == "group" && -n "${FAKE_GID_COLLISION_ID:-}" && "$key" == "$FAKE_GID_COLLISION_ID" ]]; then
-  echo "${FAKE_GID_COLLISION_NAME}:x:$key:"
-  exit 0
-fi
-exit 2
-EOF
+  getent() {
+    local db="${1:-}" key="${2:-}"
+    if [[ "$db" == "passwd" && -n "${FAKE_UID_COLLISION_ID:-}" && "$key" == "$FAKE_UID_COLLISION_ID" ]]; then
+      echo "${FAKE_UID_COLLISION_NAME}:x:$key:$key::/home/x:/bin/bash"; return 0
+    fi
+    if [[ "$db" == "group" && -n "${FAKE_GID_COLLISION_ID:-}" && "$key" == "$FAKE_GID_COLLISION_ID" ]]; then
+      echo "${FAKE_GID_COLLISION_NAME}:x:$key:"; return 0
+    fi
+    return 2
+  }
 
-  cat > "$STUB_BIN/usermod" <<'EOF'
-#!/usr/bin/env bash
-echo "usermod $*" >> "$CALL_LOG"
-exit "${FAKE_USERMOD_EXIT:-0}"
-EOF
+  usermod() { echo "usermod $*" >> "$CALL_LOG"; return "${FAKE_USERMOD_EXIT:-0}"; }
+  groupmod() { echo "groupmod $*" >> "$CALL_LOG"; return "${FAKE_GROUPMOD_EXIT:-0}"; }
+  chown() { echo "chown $*" >> "$CALL_LOG"; return 0; }
 
-  cat > "$STUB_BIN/groupmod" <<'EOF'
-#!/usr/bin/env bash
-echo "groupmod $*" >> "$CALL_LOG"
-exit "${FAKE_GROUPMOD_EXIT:-0}"
-EOF
-
-  cat > "$STUB_BIN/chown" <<'EOF'
-#!/usr/bin/env bash
-echo "chown $*" >> "$CALL_LOG"
-exit 0
-EOF
-
-  chmod +x "$STUB_BIN"/id "$STUB_BIN"/getent "$STUB_BIN"/usermod "$STUB_BIN"/groupmod "$STUB_BIN"/chown
-  export PATH="$STUB_BIN:$PATH"
+  export -f id getent usermod groupmod chown 2>/dev/null || true
 }
 
 run_remap() {

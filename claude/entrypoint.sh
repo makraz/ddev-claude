@@ -16,6 +16,23 @@
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
+# Pin PATH before running anything as root.
+#
+# The image prepends /home/claude/.local/bin (where the Claude Code binary
+# lives) to PATH — and that directory is owned by, and writable by, the
+# unprivileged `claude` user. It sits ahead of /usr/sbin, /usr/bin, /sbin and
+# /bin, so every bare-name command this script runs as root — id, getent,
+# usermod, groupmod, chown, mkdir, chmod — would resolve there first. The agent
+# could drop an executable named `usermod` in its own bin directory and have
+# PID 1 run it as root on the next container start. Container root holds
+# NET_ADMIN/NET_RAW and can rewrite /etc/claude-sandbox, so that defeats both
+# the firewall and the immutable-config boundary.
+#
+# This mirrors what sudoers already enforces via secure_path on the other root
+# entry point. Set before main() so it covers every root-side call below.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
 # Overridable for the bats suite; these are the real paths inside the image.
 STATE_DIR="${STATE_DIR:-/home/claude/.claude}"
 SEED_SRC="${SEED_SRC:-/mnt/ddev_config/.claude}"
@@ -146,9 +163,10 @@ seed_state_dir() {
 # silently destroyed the user's own model / hooks / statusline / env settings —
 # the generated file contains only `enabledPlugins`. The shim now passes
 # `--settings /etc/claude-sandbox/settings.json` instead, layering the plugin
-# set on per invocation and leaving the user's file alone. A plugin the agent
-# enables mid-session still does not survive the next launch, which was the
-# reason for re-asserting it in the first place.
+# set on per invocation and leaving the user's file alone. Note this force-
+# enables the curated set but cannot force-disable anything it does not list,
+# so a plugin the agent enables does persist — the accepted trade for not
+# destroying the user's own settings.
 
 # Persist the host-set EXTRA_ALLOWED_DOMAINS into a root-owned file that
 # init-firewall.sh reads. This is the ONLY trusted channel for runtime
