@@ -50,10 +50,29 @@ fi
 # agent's own ~/.claude/settings.json. Overwriting that file would destroy the
 # user's model, hooks, statusline and env preferences on every container start.
 # `--settings` loads additional settings for this invocation only, so the
-# user's settings.json is never touched, and a plugin the agent enables
-# mid-session still does not survive the next launch.
+# user's settings.json is never touched.
+#
+# NOTE what this does and does not do: `--settings` force-ENABLES the curated
+# set on every launch, but it cannot force-DISABLE a plugin it does not list.
+# A plugin the agent enables writes to its own ~/.claude/settings.json and
+# therefore DOES persist across launches. That is the accepted trade for not
+# destroying the user's own settings — the plugin layer is a default, not a
+# boundary. To actually pin the set, the generated file would have to emit an
+# explicit `false` for every known-but-uncurated plugin.
 if [[ -r "$SETTINGS_FILE" ]]; then
   args+=(--settings "$SETTINGS_FILE")
+  # A user-supplied --settings comes later on the command line and wins
+  # outright, dropping the curated set. Unlike --tools we do not reject it —
+  # it is a legitimate flag and this layer is not a security boundary — but
+  # say so, because silently losing plugin curation is confusing.
+  for a in "$@"; do
+    case "$a" in
+      --settings|--settings=*)
+        echo "claude: your --settings overrides the sandbox's curated plugin set." >&2
+        break
+        ;;
+    esac
+  done
 fi
 
 exec "$REAL" "${args[@]+"${args[@]}"}" "$@"

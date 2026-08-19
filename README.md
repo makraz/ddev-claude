@@ -275,7 +275,7 @@ Add-on-managed files are removed. User-managed files are preserved (delete manua
 
 ```bash
 rm -rf .ddev/claude.yaml .ddev/.claude/ .ddev/claude.local/
-docker volume rm "${DDEV_SITENAME}_claude_state"   # auth + session history
+docker volume rm "$(basename "$PWD")_claude_state"   # auth + session history (project name = directory name by default)
 ```
 
 ## Credits

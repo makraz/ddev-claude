@@ -6,7 +6,7 @@ All notable changes to this add-on are documented here. This project adheres to
 
 ## [Unreleased]
 
-## [v0.4.0-beta.1] — 2026-08-16
+## [v0.4.0-beta.1] — 2026-08-19
 
 ### Changed — BREAKING
 - The agent's built-in tool set is now restricted. With no `tools:` key in
@@ -53,8 +53,11 @@ All notable changes to this add-on are documented here. This project adheres to
   by writing into the agent's `~/.claude/settings.json`. An earlier build of this
   release overwrote that file on every container start with one containing only
   `enabledPlugins`, which destroyed any model, hooks, statusline or env settings
-  the user had. The user's file is now never modified, and a plugin the agent
-  enables mid-session still does not survive the next launch.
+  the user had. The user's file is now never modified. Note the limit of this:
+  `--settings` force-enables the curated set on every launch but cannot
+  force-disable a plugin it does not list, so a plugin the agent enables does
+  persist in its own state. That is the accepted trade for not destroying the
+  user's settings — the plugin layer is a default, not a boundary.
 
 ### Fixed
 - The sidecar no longer bind-mounts the project from the host when Mutagen is
