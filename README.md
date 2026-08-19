@@ -36,10 +36,11 @@ After `ddev add-on get`, commit the changes to your project's `.ddev/` directory
 | `ddev claude shell` | Drop into bash inside the sidecar (firewall active). |
 | `ddev claude exec <cmd>` | Run one command in the sidecar non-interactively. |
 | `ddev claude rebuild` | Regenerate `.ddev/claude/Dockerfile` after editing `.ddev/claude.yaml`. |
+| `ddev claude state [dir]` | Copy the sidecar's `~/.claude` out to a directory (default `.ddev/.claude.export`). |
 | `ddev claude help` | Print the help text. |
 | `ddev claude <args>` | Anything else passes through to the `claude` CLI (e.g. `--resume`). |
 
-The sidecar is reachable as the `claude` service on the DDEV default network. Auth tokens and settings persist at `.ddev/.claude/` (gitignored by default).
+The sidecar is reachable as the `claude` service on the DDEV default network. Claude's state (auth, session history, plugins) lives in a Docker volume, `${DDEV_SITENAME}_claude_state`, seeded once from `.ddev/.claude/` on first start after upgrading. `.credentials.json` is snapshotted back to `.ddev/.claude/` when a session exits, so auth survives even if the volume is removed. Copy the whole state out with `ddev claude state [dir]`.
 
 ### Environment variables
 
@@ -56,7 +57,7 @@ Set on your host shell before `ddev start` / `ddev restart`. The sidecar's `dock
 ## Performance
 
 When Mutagen is enabled the sidecar reads the project through DDEV's synced
-Docker volume rather than a host bind mount — roughly 20× faster on
+Docker volume rather than a host bind mount — measured at 0.065 s vs 28.4 s on
 content-heavy operations like a `grep` over `vendor/`. See
 [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for the measurements and how to
 reproduce them.
@@ -77,23 +78,39 @@ is a parse error.
 | `plugins`               | list   | `superpowers`, `code-review`, `gitlab`, `code-simplifier` |
 | `mount_mode`            | scalar | `auto` — also `mutagen`, `bind`                       |
 
-`tools` is an allow-list over Claude Code's built-in tool set. The default
+`tools` is an allow-list over Claude Code's **built-in** tool set. The default
 deliberately excludes `Edit`, `Grep`, `Glob`, `Task`, `WebFetch`, `WebSearch`,
-`NotebookEdit`, `TodoWrite` and `SlashCommand`, and all MCP tools. `Skill` is
-included because `superpowers` is enabled by default and exists to be invoked
-through it.
+`NotebookEdit`, `TodoWrite` and `SlashCommand`. `Skill` is included because
+`superpowers` is enabled by default and exists to be invoked through it.
+
+The CLI scopes `--tools` to the built-in set, so whether it also constrains MCP
+tools is unverified — do not rely on `tools:` to disable an MCP server. Omit the
+server instead.
 
 Dropping `Edit` has a real cost: every change becomes a whole-file `Write`,
 which spends output tokens proportional to file size and risks losing unrelated
 content in large files. Add `Edit` back if that trade is wrong for your project.
 Add `Edit` to the `tools:` list in `.ddev/claude.yaml`, then `ddev claude rebuild && ddev restart`.
 
-`tools` and `plugins` are baked into the image at root-owned paths, so the agent
-cannot widen them at runtime. Changing either needs:
+`tools` and `plugins` are baked into the image at root-owned paths and applied by
+a `claude` shim that sits ahead of the real binary on `PATH`. Changing either
+needs:
 
 ```bash
 ddev claude rebuild && ddev restart
 ```
+
+**This is a default and a cost control, not a containment boundary.** Two things
+bypass it by design: a *login* shell (`bash -l`, `su - claude`) sources
+`~/.profile`, which puts the real binary ahead of the shim; and because `Bash` is
+in the default tool set, the agent can invoke `/home/claude/.local/bin/claude`
+directly whenever it likes. The shim runs as the same user as the agent, so no
+arrangement here could prevent that. Use `tools:` to shape what the agent reaches
+for by default and what a session costs — not to contain it.
+
+The boundaries that *are* real, and are unaffected: the outbound firewall, the
+unprivileged uid, and the root-owned files under `/etc/claude-sandbox/` and
+`/etc/claude-firewall/`.
 
 ### Available extras
 
@@ -245,7 +262,7 @@ gh release create v0.3.0-beta.1 --prerelease --notes-file release-notes.md
 - **DNS open on port 53**: required for dnsmasq upstreams; a determined agent could in theory use DNS tunneling for exfiltration.
 - **`.git` and `.env*` are bind-mounted**: the agent can read (and potentially commit) anything in your project directory. Keep secrets out of the working tree, or use `CLAUDE_SAFE=1` for untrusted tasks.
 - **Agent uid is remapped to the host's, never root**: the `claude` user is built at uid 1000 in the base image, but `entrypoint.sh` remaps it to `DDEV_UID`/`DDEV_GID` (the host user's uid/gid, as DDEV's own `web` container also uses) at every container start — this is what lets the agent actually read/write the project under a Mutagen-synced volume, which DDEV populates with host ownership. The remap never targets uid/gid 0, and is skipped (with a warning) if the target uid/gid already belongs to a different account in the container.
-- **`.ddev/.claude/` holds auth state**: a determined agent could plant configuration there (e.g. a malicious MCP entry in `~/.claude/settings.json`) that runs in the next session. Such code still runs under the same firewall + uid, so it cannot break out, but the persistence vector is real.
+- **The state volume holds auth state**: a determined agent could plant configuration in its own `~/.claude/settings.json` (e.g. a malicious MCP entry) that runs in the next session. Such code still runs under the same firewall + uid, so it cannot break out, but the persistence vector is real. Note the addon no longer overwrites that file, so nothing resets it between sessions.
 
 ## Removing
 
@@ -258,6 +275,7 @@ Add-on-managed files are removed. User-managed files are preserved (delete manua
 
 ```bash
 rm -rf .ddev/claude.yaml .ddev/.claude/ .ddev/claude.local/
+docker volume rm "${DDEV_SITENAME}_claude_state"   # auth + session history
 ```
 
 ## Credits

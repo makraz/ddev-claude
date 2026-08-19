@@ -12,10 +12,16 @@ All notable changes to this add-on are documented here. This project adheres to
 - The agent's built-in tool set is now restricted. With no `tools:` key in
   `.ddev/claude.yaml`, the default is `Read`, `Write`, `Bash`, `Skill` —
   `Edit`, `Grep`, `Glob`, `Task`, `WebFetch`, `WebSearch`, `NotebookEdit`,
-  `TodoWrite`, `SlashCommand` and all MCP tools are off. Existing projects with
-  no `tools:` key are affected on upgrade. Add a `tools:` list to opt back in.
-  The restriction is baked into the image and enforced by a `claude` shim on
-  `PATH`, so it applies to `ddev claude shell` and direct `docker exec` too.
+  `TodoWrite` and `SlashCommand` are off. Existing projects with no `tools:` key
+  are affected on upgrade. Add a `tools:` list to opt back in. Applied by a
+  `claude` shim ahead of the real binary on `PATH`, so it covers `ddev claude`,
+  `ddev claude shell`, `ddev claude exec` and plain `docker exec`.
+  **This is a default and a cost control, not a containment boundary:** a login
+  shell (`bash -l`) sources `~/.profile`, which finds the real binary first, and
+  `Bash` in the default set lets the agent invoke that binary directly. The shim
+  runs as the agent's own uid, so nothing here could prevent that. The CLI scopes
+  `--tools` to built-in tools, so its effect on MCP tools is unverified — omit an
+  MCP server rather than relying on `tools:` to disable it.
 - Plugins are now curated. With no `plugins:` key the default is `superpowers`,
   `code-review`, `gitlab`, `code-simplifier` — the interpreter-free set. This
   fixes the `FATAL: No working Python found` that Python-backed plugins
@@ -35,10 +41,35 @@ All notable changes to this add-on are documented here. This project adheres to
 - `ddev claude state [dir]` — copy the sidecar's `~/.claude` out to a directory.
 - `docs/PERFORMANCE.md`, with the measurements and a reproducible benchmark.
 
+### Changed
+- Firewall diagnostics are no longer printed on the success path. `ddev claude`,
+  `shell` and `exec` used to emit `[firewall] …` lines before the command's own
+  output on every invocation. Failures are still surfaced in full.
+- `.credentials.json` is now copied back to `.ddev/.claude/` when a session
+  exits, so authentication survives even if the state volume is deleted. Note
+  this means deleting the volume no longer forces re-authentication — a fresh
+  volume re-seeds the credential file from there.
+- The curated plugin set is applied by passing `--settings` at launch rather than
+  by writing into the agent's `~/.claude/settings.json`. An earlier build of this
+  release overwrote that file on every container start with one containing only
+  `enabledPlugins`, which destroyed any model, hooks, statusline or env settings
+  the user had. The user's file is now never modified, and a plugin the agent
+  enables mid-session still does not survive the next launch.
+
 ### Fixed
 - The sidecar no longer bind-mounts the project from the host when Mutagen is
-  enabled. It now shares `web`'s synced volume, which measured ~20× faster on a
-  `grep` over `vendor/` and ~13× on a `find`. Set `mount_mode: bind` to opt out.
+  enabled. It now shares `web`'s synced volume. Measured as the agent on one
+  host (macOS, OrbStack, DDEV v1.25.3, 86 MB / 13,017-file corpus): a `grep` over
+  `vendor/` went from 28.4 s to 0.065 s, and a `find` from 0.68 s to 0.019 s.
+  That is one machine's result, not a guarantee — see `docs/PERFORMANCE.md` for
+  the method and how to reproduce it. Set `mount_mode: bind` to opt out.
+- `ddev add-on remove claude` never actually deleted the files it generates. Its
+  removal script runs with the working directory set to `.ddev/`, so every
+  `rm -f .ddev/claude/...` resolved one level too deep and silently no-opped —
+  `rm -f` does not error on a missing path. Dates to commit `749d3b3`.
+- `ddev claude exec <cmd>` leaked the firewall's own log output into its stdout,
+  breaking any consumer that parsed the command's output. The health check's
+  output is now captured and shown only if the check fails.
 - `ddev claude` refuses to start while the Mutagen sync is still staging.
   Previously the agent saw an empty or half-populated `/var/www/html` and
   reported that files did not exist.

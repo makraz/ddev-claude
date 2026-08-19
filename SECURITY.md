@@ -45,7 +45,8 @@ about most:
   proxy/CONNECT tricks.
 - **Sandbox escape** — the agent gaining write access to the host filesystem
   outside the mounted project, or to other DDEV containers it should not reach.
-- **Secret exposure** — `.ddev/.claude/` auth tokens, `ANTHROPIC_API_KEY`,
+- **Secret exposure** — auth tokens (in the `${DDEV_SITENAME}_claude_state` volume,
+  and snapshotted to `.ddev/.claude/.credentials.json` on session exit), `ANTHROPIC_API_KEY`,
   `GITHUB_PERSONAL_ACCESS_TOKEN`/`GH_TOKEN`, or host SSH keys becoming readable
   or exfiltratable from inside the sidecar.
 - **Privilege escalation** — the sidecar process gaining root on the host, or the
