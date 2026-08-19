@@ -147,9 +147,33 @@ snapshot_credentials() {
 
   local dest="${DDEV_APPROOT}/.ddev/.claude"
   mkdir -p "$dest" 2>/dev/null || return 0
-  docker cp "${CONTAINER}:/home/claude/.claude/.credentials.json" \
-            "${dest}/.credentials.json" >/dev/null 2>&1 \
-    || echo "warning: could not snapshot credentials from the sidecar" >&2
+
+  # Copy to a temp name and only promote it if it is a regular file. The source
+  # lives in the agent's own writable state volume, so the agent controls what
+  # is at that path. `docker cp` does NOT dereference a top-level symlink (so it
+  # cannot be used to read root-owned files out of the container), but it will
+  # faithfully reproduce a symlink, FIFO or directory at a fixed host path.
+  # Validating the type keeps something odd from landing where the next run,
+  # or a user, expects a credentials file.
+  local tmp="${dest}/.credentials.json.snapshot"
+  rm -f "$tmp" 2>/dev/null
+  if ! docker cp "${CONTAINER}:/home/claude/.claude/.credentials.json" "$tmp" >/dev/null 2>&1; then
+    # No credentials file is the normal case for ANTHROPIC_API_KEY users —
+    # Claude Code never writes one, so do not cry wolf on every exit.
+    if docker exec "$CONTAINER" test -e /home/claude/.claude/.credentials.json 2>/dev/null; then
+      echo "warning: could not snapshot credentials from the sidecar" >&2
+    fi
+    rm -f "$tmp" 2>/dev/null
+    return 0
+  fi
+
+  if [[ -f "$tmp" && ! -L "$tmp" ]]; then
+    mv -f "$tmp" "${dest}/.credentials.json" 2>/dev/null \
+      || echo "warning: could not store the credential snapshot" >&2
+  else
+    echo "warning: credential snapshot was not a regular file; discarded" >&2
+    rm -rf "$tmp" 2>/dev/null
+  fi
   return 0
 }
 

@@ -16,6 +16,27 @@ the sidecar container. The security promise is:
 The firewall bounds **where** traffic can go, not **what** leaves through the
 destinations you allow. Read this before trusting the sandbox with secrets:
 
+- **Port 53 egress is unrestricted by destination.** The OUTPUT chain accepts all
+  UDP and TCP traffic on port 53 to *any* host, not just the configured resolvers,
+  so an agent can open a bidirectional channel to any attacker-controlled host
+  listening on 53 — DNS tunnelling, or a raw socket to `attacker:53`. Demonstrated
+  against a public resolver that is not in the allow-list. This dates to the first
+  release and is **not** fixed in v0.4.0: `init-firewall.sh` is frozen for this
+  release, and narrowing those rules touches DNS, which everything else depends on,
+  so it needs its own change with a full test cycle. Tracked for the next release.
+  Until then, treat port 53 as an open egress path when deciding what secrets the
+  sidecar may hold.
+
+- **Host-side code execution through the project tree is in scope for the agent.**
+  "Sandbox escape" below means writing *outside* the mounted project — but inside
+  it, the agent can write `.git/hooks/*` (run on the host by your next git
+  command), `.ddev/commands/host/*` (run on the host by your next `ddev` command),
+  and `.ddev/claude.local/Dockerfile.fragment` (root `RUN` lines in the next image
+  build). All three predate v0.4.0. One v0.4.0 nuance: because the agent now runs
+  as *your* uid, files it plants are owned by you rather than by a mismatched
+  container uid, so they look native. Review agent-authored changes to `.git/` and
+  `.ddev/` with the same care as any other code you are about to execute.
+
 - **Exfiltration through allow-listed hosts is still possible.** The default
   allow-list includes `github.com`/`api.github.com`, and the sidecar carries the
   agent's own `GITHUB_PERSONAL_ACCESS_TOKEN`/`GH_TOKEN` and `ANTHROPIC_API_KEY`.
