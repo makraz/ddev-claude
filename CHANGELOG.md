@@ -32,6 +32,20 @@ All notable changes to this add-on are documented here. This project adheres to
   first start; the old directory is left in place. `ddev claude state` copies
   the volume back out. `ddev add-on remove claude` does not delete the volume.
 
+### Security
+- Port 53 egress is now restricted by destination. The OUTPUT chain previously
+  accepted all UDP and TCP traffic on port 53 to *any* host, which gave the agent a
+  full bidirectional channel to anything listening on 53 — DNS tunnelling, or simply a
+  raw socket to `attacker:53`. Demonstrated in review against a public resolver that is
+  not in the allow-list. Rules are now scoped to the actual DNS upstreams. Dates to the
+  first release; everything else already went through the ipset allow-list.
+  dnsmasq's `server=` lines and the iptables rules are now generated from one
+  `DNS_UPSTREAMS` array instead of two hand-maintained copies, so they cannot drift —
+  a drift would either break DNS or silently reopen the hole.
+- What remains, and is documented in `SECURITY.md`: DNS tunnelling *through* an
+  allowed recursive resolver, and unrestricted ICMP echo. Both are inherent or
+  pre-existing rather than introduced here.
+
 ### Added
 - `python` and `node` extras, for projects that want the Python- or Node-backed
   plugins. Both install from Debian's own repositories, so neither adds a

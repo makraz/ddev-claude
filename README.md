@@ -7,7 +7,7 @@
 
 ## Overview
 
-This add-on integrates [Claude Code](https://docs.claude.com/en/docs/claude-code/overview), Anthropic's AI coding CLI, into your [DDEV](https://ddev.com) project as a **sandboxed sidecar container**. Claude runs with `--dangerously-skip-permissions` (YOLO mode) safely contained behind an iptables + ipset + dnsmasq firewall, so an agent off the rails cannot exfiltrate your `.env`, your SSH keys, or anything else outside the project tree.
+This add-on integrates [Claude Code](https://docs.claude.com/en/docs/claude-code/overview), Anthropic's AI coding CLI, into your [DDEV](https://ddev.com) project as a **sandboxed sidecar container**. Claude runs with `--dangerously-skip-permissions` (YOLO mode) safely contained behind an iptables + ipset + dnsmasq firewall, so an agent off the rails cannot reach hosts you have not allow-listed. Note what that does **not** cover: your project tree — including `.env` — is readable by the agent by design, and the firewall bounds *where* traffic goes, not *what* leaves through a destination you allowed. Read [SECURITY.md](SECURITY.md) before trusting the sandbox with secrets.
 
 The default sidecar is **minimum viable**: Claude Code + firewall on a pre-built `debian:bookworm-slim` base image. Project-specific tools (PHP, gh, Playwright, etc.) are opt-in via a small extras catalog or a Dockerfile escape hatch.
 
@@ -224,7 +224,7 @@ The firewall is activated **at container start** by `entrypoint.sh` (PID 1, runn
 1. **ipsets** — `allowed-ipv4` (hash:ip) and `allowed-net` (hash:net).
 2. **Initial DNS resolution** — `dig` resolves the default + extra domains, populating `allowed-ipv4`.
 3. **dnsmasq** — listens on `127.0.0.1`, upstreams to `127.0.0.11` (Docker's embedded DNS, so DDEV service names like `web`/`db` resolve), `1.1.1.1`, `8.8.8.8`. Each allow-listed domain is bound via `ipset=/<domain>/allowed-ipv4`, so future resolutions automatically extend the allow-list — handles CDN IP rotation.
-4. **iptables** — default policy DROP on INPUT/OUTPUT/FORWARD. ACCEPT only loopback, established/related, DNS (port 53), the two ipsets, the host gateway, and inbound 80/443.
+4. **iptables** — default policy DROP on INPUT/OUTPUT/FORWARD. ACCEPT only loopback, established/related, port 53 **to the configured DNS upstreams only**, the two ipsets, the host gateway, and inbound 80/443.
 5. **IPv6** — dropped entirely via `ip6tables`. If `ip6tables` is unavailable but the container has an IPv6 default route, `init-firewall.sh` **fails loudly** rather than leave v6 egress unfiltered.
 6. **Smoke tests** — reachability checks for github (must succeed) and `example.com` (must fail).
 
@@ -259,7 +259,8 @@ gh release create v0.3.0-beta.1 --prerelease --notes-file release-notes.md
 ## Known limitations
 
 - **No IPv6**: dropped entirely. Extend `init-firewall.sh` if dual-stack is required.
-- **DNS open on port 53**: required for dnsmasq upstreams; a determined agent could in theory use DNS tunneling for exfiltration.
+- **DNS tunnelling through an allowed resolver**: port 53 is restricted to the configured upstreams (v0.4.0), so a raw socket to an arbitrary host on 53 is blocked — but an agent can still encode data into queries for a domain whose nameserver an attacker controls. Inherent to permitting recursive DNS.
+- **ICMP echo is unrestricted by destination**: a low-bandwidth ICMP tunnel to an arbitrary host is constructible. Not yet narrowed; see `SECURITY.md`.
 - **`.git` and `.env*` are bind-mounted**: the agent can read (and potentially commit) anything in your project directory. Keep secrets out of the working tree, or use `CLAUDE_SAFE=1` for untrusted tasks.
 - **Agent uid is remapped to the host's, never root**: the `claude` user is built at uid 1000 in the base image, but `entrypoint.sh` remaps it to `DDEV_UID`/`DDEV_GID` (the host user's uid/gid, as DDEV's own `web` container also uses) at every container start — this is what lets the agent actually read/write the project under a Mutagen-synced volume, which DDEV populates with host ownership. The remap never targets uid/gid 0, and is skipped (with a warning) if the target uid/gid already belongs to a different account in the container.
 - **The state volume holds auth state**: a determined agent could plant configuration in its own `~/.claude/settings.json` (e.g. a malicious MCP entry) that runs in the next session. Such code still runs under the same firewall + uid, so it cannot break out, but the persistence vector is real. Note the addon no longer overwrites that file, so nothing resets it between sessions.

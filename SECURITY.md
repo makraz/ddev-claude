@@ -16,16 +16,19 @@ the sidecar container. The security promise is:
 The firewall bounds **where** traffic can go, not **what** leaves through the
 destinations you allow. Read this before trusting the sandbox with secrets:
 
-- **Port 53 egress is unrestricted by destination.** The OUTPUT chain accepts all
-  UDP and TCP traffic on port 53 to *any* host, not just the configured resolvers,
-  so an agent can open a bidirectional channel to any attacker-controlled host
-  listening on 53 — DNS tunnelling, or a raw socket to `attacker:53`. Demonstrated
-  against a public resolver that is not in the allow-list. This dates to the first
-  release and is **not** fixed in v0.4.0: `init-firewall.sh` is frozen for this
-  release, and narrowing those rules touches DNS, which everything else depends on,
-  so it needs its own change with a full test cycle. Tracked for the next release.
-  Until then, treat port 53 as an open egress path when deciding what secrets the
-  sidecar may hold.
+- **DNS tunnelling through an allowed resolver is still possible.** As of v0.4.0 port
+  53 egress is restricted by destination — only the configured DNS upstreams (Docker's
+  embedded resolver, the host gateway, `1.1.1.1`, `8.8.8.8`) are reachable, so a raw
+  socket to `attacker:53` is blocked. What remains is inherent to permitting any
+  recursive resolver: an agent can encode data into queries for a domain whose
+  authoritative nameserver an attacker controls, and read data back out of the answers.
+  Demonstrated in review. Restricting this further would mean giving up recursive DNS.
+
+- **ICMP echo is unrestricted by destination.** The OUTPUT chain accepts
+  `--icmp-type echo-request` to any host, and ICMP payloads carry data, so a
+  low-bandwidth tunnel to an arbitrary host is constructible. Same class as the
+  port-53 hole that v0.4.0 closed, and not yet narrowed — it needs its own change and
+  test cycle. Tracked.
 
 - **Host-side code execution through the project tree is in scope for the agent.**
   "Sandbox escape" below means writing *outside* the mounted project — but inside
