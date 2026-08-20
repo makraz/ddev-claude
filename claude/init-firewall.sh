@@ -91,7 +91,8 @@ DEFAULT_DOMAINS=(
 )
 
 # Allow-list sources are ROOT-OWNED files OUTSIDE the bind-mounted project
-# tree, so the unprivileged `claude` user (uid 1000) cannot edit them and
+# tree, so the unprivileged `claude` user (uid 1000 in the base image; remapped to the
+# host's uid at container start by entrypoint.sh) cannot edit them and
 # re-run this script to widen its own egress:
 #   - extra-domains.list   : baked into the image at build from .ddev/claude.yaml
 #   - runtime-domains.list : written at container start by entrypoint.sh from

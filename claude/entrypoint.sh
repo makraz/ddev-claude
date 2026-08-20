@@ -126,7 +126,12 @@ remap_user_to_host() {
     # /home/claude/.claude is a named volume whose contents were created
     # under the old uid/gid; reassert ownership so the (possibly remapped)
     # claude user still owns its own state.
-    chown -R claude:claude /home/claude
+    # -R only; never -L/-H. GNU chown defaults to -P (lchown), which is what stops
+    # an agent-planted symlink inside its own state volume from turning this into a
+    # chown-any-path primitive. Do not "harden" this by following symlinks.
+    if ! chown -R claude:claude /home/claude; then
+      echo "[entrypoint] WARNING: chown -R /home/claude was incomplete; the agent may not own all of its state" >&2
+    fi
     echo "[entrypoint] remapped claude to uid=$(id -u claude) gid=$(id -g claude) (was uid=$current_uid)"
   fi
 }
