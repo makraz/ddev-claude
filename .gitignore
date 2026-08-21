@@ -7,3 +7,6 @@
 
 # Local Claude Code session config (plugins, local settings)
 .claude/
+
+# Design records and maintainer playbooks — kept locally, deliberately untracked.
+/docs/
