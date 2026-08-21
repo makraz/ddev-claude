@@ -6,7 +6,7 @@ All notable changes to this add-on are documented here. This project adheres to
 
 ## [Unreleased]
 
-## [v0.4.0-beta.1] — 2026-08-19
+## [v0.4.0] — 2026-08-21
 
 ### Changed — BREAKING
 - The agent's built-in tool set is now restricted. With no `tools:` key in

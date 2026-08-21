@@ -27,6 +27,12 @@ used for development.
 **This release supersedes v0.3.0-beta.\*** — those never reached users, and their content is
 included here. No separate v0.3.0 stable is needed.
 
+**No v0.4.0 beta either.** One was tagged and its image published, but a subsequent history
+rewrite orphaned the commit it pointed at, so the tag described code that existed on no branch.
+It was dropped rather than moved: re-pointing a released tag rebuilds its image with a newer
+agent version, which is the one thing `RELEASING.md` says never to do. Going straight to stable
+also fixes the actual delivery problem — `ddev add-on get` never serves a pre-release.
+
 ---
 
 ## v0.4.1 — artifact integrity and the test blind spot
