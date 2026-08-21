@@ -58,9 +58,18 @@ Set on your host shell before `ddev start` / `ddev restart`. The sidecar's `dock
 
 When Mutagen is enabled the sidecar reads the project through DDEV's synced
 Docker volume rather than a host bind mount — measured at 0.065 s vs 28.4 s on
-content-heavy operations like a `grep` over `vendor/`. See
-[docs/PERFORMANCE.md](docs/PERFORMANCE.md) for the measurements and how to
-reproduce them.
+content-heavy operations like a `grep` over `vendor/`. Measured as the agent on
+one host (macOS, OrbStack, DDEV v1.25.3, 86 MB / 13,017-file corpus) — one
+machine's result, not a guarantee. Reproduce it with:
+
+```bash
+docker exec --user claude ddev-<project>-claude bash -c '
+  grep -rl "class " /var/www/html/vendor | wc -l   # sanity: must be non-zero
+  time grep -rl "class " /var/www/html/vendor >/dev/null 2>&1'
+```
+
+Run it as the agent, not as root: root can read files the agent cannot, so a
+root-side measurement can look fast while the agent has no access at all.
 
 `ddev claude` refuses to start while the Mutagen sync is still staging, because
 an agent pointed at a half-synced tree reports that your files do not exist.

@@ -53,7 +53,6 @@ All notable changes to this add-on are documented here. This project adheres to
 - `tools:`, `plugins:` and `mount_mode:` keys in `.ddev/claude.yaml`.
   `mount_mode` is the first scalar key the parser accepts.
 - `ddev claude state [dir]` — copy the sidecar's `~/.claude` out to a directory.
-- `docs/PERFORMANCE.md`, with the measurements and a reproducible benchmark.
 
 ### Changed
 - Firewall diagnostics are no longer printed on the success path. `ddev claude`,
@@ -78,8 +77,8 @@ All notable changes to this add-on are documented here. This project adheres to
   enabled. It now shares `web`'s synced volume. Measured as the agent on one
   host (macOS, OrbStack, DDEV v1.25.3, 86 MB / 13,017-file corpus): a `grep` over
   `vendor/` went from 28.4 s to 0.065 s, and a `find` from 0.68 s to 0.019 s.
-  That is one machine's result, not a guarantee — see `docs/PERFORMANCE.md` for
-  the method and how to reproduce it. Set `mount_mode: bind` to opt out.
+  That is one machine's result, not a guarantee; the README carries the method and
+  the reproduction command. Set `mount_mode: bind` to opt out.
 - `ddev add-on remove claude` never actually deleted the files it generates. Its
   removal script runs with the working directory set to `.ddev/`, so every
   `rm -f .ddev/claude/...` resolved one level too deep and silently no-opped —

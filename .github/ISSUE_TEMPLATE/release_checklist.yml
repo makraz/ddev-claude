@@ -8,7 +8,7 @@ body:
     attributes:
       value: |
         One issue per release. Check items as you go. Full rationale lives in
-        [`docs/MAINTAINING.md`](../blob/main/docs/MAINTAINING.md).
+        the maintainer playbook.
 
   - type: input
     id: version
