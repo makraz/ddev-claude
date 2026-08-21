@@ -10,20 +10,177 @@
 # `ddev claude` host command.
 #
 # After activation it idles as PID 1 (`sleep infinity`) so the container stays
-# up; interactive Claude Code sessions are launched on demand, as uid 1000,
-# by the `ddev claude` host command.
+# up; interactive Claude Code sessions are launched on demand, as the
+# unprivileged `claude` user (remapped to the host's uid/gid — see
+# remap_user_to_host below), by the `ddev claude` host command.
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
-if [[ "$(id -u)" -eq 0 ]]; then
-  # Persist the host-set EXTRA_ALLOWED_DOMAINS into a root-owned file that
-  # init-firewall.sh reads. This is the ONLY trusted channel for runtime
-  # domains: it runs as genuine root with the compose-provided env, which the
-  # unprivileged agent cannot influence. (Crucially, init-firewall.sh no longer
-  # reads EXTRA_ALLOWED_DOMAINS from its own env, so the agent cannot inject
-  # domains by exporting the var and re-running the firewall via sudo.)
-  RUNTIME_LIST=/etc/claude-firewall/runtime-domains.list
-  mkdir -p /etc/claude-firewall
+# Pin PATH before running anything as root.
+#
+# The image prepends /home/claude/.local/bin (where the Claude Code binary
+# lives) to PATH — and that directory is owned by, and writable by, the
+# unprivileged `claude` user. It sits ahead of /usr/sbin, /usr/bin, /sbin and
+# /bin, so every bare-name command this script runs as root — id, getent,
+# usermod, groupmod, chown, mkdir, chmod — would resolve there first. The agent
+# could drop an executable named `usermod` in its own bin directory and have
+# PID 1 run it as root on the next container start. Container root holds
+# NET_ADMIN/NET_RAW and can rewrite /etc/claude-sandbox, so that defeats both
+# the firewall and the immutable-config boundary.
+#
+# This mirrors what sudoers already enforces via secure_path on the other root
+# entry point. Set before main() so it covers every root-side call below.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+# Overridable for the bats suite; these are the real paths inside the image.
+STATE_DIR="${STATE_DIR:-/home/claude/.claude}"
+SEED_SRC="${SEED_SRC:-/mnt/ddev_config/.claude}"
+RUNTIME_LIST="${RUNTIME_LIST:-/etc/claude-firewall/runtime-domains.list}"
+
+# Remap the `claude` user/group to the host's uid/gid (DDEV_UID/DDEV_GID,
+# forwarded from docker-compose.claude.yaml).
+#
+# Why: under Mutagen, DDEV populates the synced volume with real POSIX
+# ownership/mode from the host — files at 0600, directories at 0700, owned by
+# the HOST uid. Bind mounts masked this for years (Docker presents a
+# bind-mounted file as owned by whichever uid accesses it), but a named
+# volume enforces real permission checks, so an agent whose uid doesn't match
+# the host's is locked out of read, write, AND traversal. DDEV's own `web`
+# container gets equivalent behavior for free by baking uid/gid into its
+# image at build time; this sidecar's base image is frozen for this release,
+# so the same effect happens here, at runtime, while we are still genuinely
+# root and before any agent process exists.
+#
+# The security invariant was always "the agent runs unprivileged, never
+# root" — uid 1000 was incidental. Remapping to the host's uid preserves that
+# invariant; it must never remap to uid/gid 0.
+#
+# The `claude` username itself never changes here, only its numeric uid/gid —
+# this matters because the sudoers entry (/etc/sudoers.d/claude-firewall)
+# reads `claude ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh`, keyed
+# on the NAME "claude". sudo resolves that entry by looking up the invoking
+# user's name, so preserving the name preserves exactly the one privilege the
+# agent is meant to keep — nothing more, nothing less.
+remap_user_to_host() {
+  local target_uid="${DDEV_UID:-}"
+  local target_gid="${DDEV_GID:-}"
+  local current_uid
+  current_uid="$(id -u claude 2>/dev/null)" || current_uid=""
+
+  if [[ -z "$current_uid" ]]; then
+    echo "[entrypoint] WARNING: could not determine current uid of 'claude'; skipping uid/gid remap" >&2
+    return 0
+  fi
+
+  if [[ -z "$target_uid" || "$target_uid" == "0" || "$target_uid" == "$current_uid" ]]; then
+    return 0
+  fi
+
+  if [[ "$target_gid" == "0" ]]; then
+    echo "[entrypoint] WARNING: DDEV_GID=0 would remap to root's group; ignoring gid, uid-only remap" >&2
+    target_gid=""
+  fi
+
+  local do_uid=1
+  local do_gid=1
+  local owner
+
+  owner="$(getent passwd "$target_uid" 2>/dev/null | cut -d: -f1)"
+  if [[ -n "$owner" && "$owner" != "claude" ]]; then
+    echo "[entrypoint] WARNING: uid $target_uid is already used by '$owner'; skipping uid remap to avoid corrupting /etc/passwd" >&2
+    do_uid=0
+  fi
+
+  if [[ -n "$target_gid" ]]; then
+    owner="$(getent group "$target_gid" 2>/dev/null | cut -d: -f1)"
+    if [[ -n "$owner" && "$owner" != "claude" ]]; then
+      echo "[entrypoint] WARNING: gid $target_gid is already used by '$owner'; skipping gid remap to avoid corrupting /etc/group" >&2
+      do_gid=0
+    fi
+  else
+    do_gid=0
+  fi
+
+  if [[ "$do_uid" -eq 0 && "$do_gid" -eq 0 ]]; then
+    return 0
+  fi
+
+  if [[ "$do_gid" -eq 1 ]]; then
+    if ! groupmod -g "$target_gid" claude; then
+      echo "[entrypoint] WARNING: groupmod to gid $target_gid failed; leaving group unchanged" >&2
+      do_gid=0
+    fi
+  fi
+
+  if [[ "$do_uid" -eq 1 ]]; then
+    local usermod_args=(-u "$target_uid")
+    [[ "$do_gid" -eq 1 ]] && usermod_args+=(-g "$target_gid")
+    if ! usermod "${usermod_args[@]}" claude; then
+      echo "[entrypoint] WARNING: usermod to uid $target_uid failed; uid unchanged" >&2
+      do_uid=0
+    fi
+  fi
+
+  if [[ "$do_uid" -eq 1 || "$do_gid" -eq 1 ]]; then
+    # /home/claude/.claude is a named volume whose contents were created
+    # under the old uid/gid; reassert ownership so the (possibly remapped)
+    # claude user still owns its own state.
+    # -R only; never -L/-H. GNU chown defaults to -P (lchown), which is what stops
+    # an agent-planted symlink inside its own state volume from turning this into a
+    # chown-any-path primitive. Do not "harden" this by following symlinks.
+    if ! chown -R claude:claude /home/claude; then
+      echo "[entrypoint] WARNING: chown -R /home/claude was incomplete; the agent may not own all of its state" >&2
+    fi
+    echo "[entrypoint] remapped claude to uid=$(id -u claude) gid=$(id -g claude) (was uid=$current_uid)"
+  fi
+}
+
+# One-shot, non-destructive migration of the pre-v0.4.0 host state directory
+# into the state volume. The sentinel is written ONLY after a complete copy, so
+# a container killed mid-seed retries into a clean state on the next start.
+seed_state_dir() {
+  mkdir -p "$STATE_DIR"
+  local sentinel="$STATE_DIR/.ddev-claude-seeded"
+
+  if [[ -f "$sentinel" ]]; then
+    return 0
+  fi
+
+  if [[ -d "$SEED_SRC" ]]; then
+    echo "[entrypoint] seeding state volume from $SEED_SRC"
+    if ! cp -a "$SEED_SRC/." "$STATE_DIR/"; then
+      echo "[entrypoint] WARNING: state seed failed; will retry on next start" >&2
+      return 0
+    fi
+  fi
+
+  # Use the `claude` name, not a literal uid: remap_user_to_host may already
+  # have moved it off 1000, and the name always resolves to whatever it is
+  # now (see remap_user_to_host's comment on why the name is stable).
+  [[ -n "${SKIP_CHOWN:-}" ]] || chown -R claude:claude "$STATE_DIR"
+  : > "$sentinel"
+  [[ -n "${SKIP_CHOWN:-}" ]] || chown claude:claude "$sentinel"
+}
+
+# NOTE: the curated plugin set is NOT written into $STATE_DIR/settings.json.
+# An earlier version copied the generated file over it on every start, which
+# silently destroyed the user's own model / hooks / statusline / env settings —
+# the generated file contains only `enabledPlugins`. The shim now passes
+# `--settings /etc/claude-sandbox/settings.json` instead, layering the plugin
+# set on per invocation and leaving the user's file alone. Note this force-
+# enables the curated set but cannot force-disable anything it does not list,
+# so a plugin the agent enables does persist — the accepted trade for not
+# destroying the user's own settings.
+
+# Persist the host-set EXTRA_ALLOWED_DOMAINS into a root-owned file that
+# init-firewall.sh reads. This is the ONLY trusted channel for runtime
+# domains: it runs as genuine root with the compose-provided env, which the
+# unprivileged agent cannot influence. (Crucially, init-firewall.sh does not
+# read EXTRA_ALLOWED_DOMAINS from its own env, so the agent cannot inject
+# domains by exporting the var and re-running the firewall via sudo.)
+persist_runtime_domains() {
+  mkdir -p "$(dirname "$RUNTIME_LIST")"
   : > "$RUNTIME_LIST"
   chmod 0644 "$RUNTIME_LIST"
   if [[ -n "${EXTRA_ALLOWED_DOMAINS:-}" ]]; then
@@ -32,18 +189,30 @@ if [[ "$(id -u)" -eq 0 ]]; then
       printf '%s\n' "$d" >> "$RUNTIME_LIST"
     done
   fi
+}
 
-  if /usr/local/bin/init-firewall.sh; then
-    echo "[entrypoint] firewall active"
+main() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    remap_user_to_host
+    seed_state_dir
+    persist_runtime_domains
+
+    if /usr/local/bin/init-firewall.sh; then
+      echo "[entrypoint] firewall active"
+    else
+      # Non-fatal: keep the container up so the user can inspect it. The
+      # firewall is re-asserted (idempotently) by the `ddev claude` host
+      # command, so a transient start-time failure self-heals.
+      echo "[entrypoint] WARNING: firewall init failed; will retry on 'ddev claude'" >&2
+    fi
   else
-    # Non-fatal: keep the container up so the user can inspect it. The
-    # firewall is re-asserted (idempotently) by the `ddev claude` host
-    # command, so a transient start-time failure (e.g. sibling not ready)
-    # self-heals on the next invocation.
-    echo "[entrypoint] WARNING: firewall init failed; will retry on 'ddev claude'" >&2
+    echo "[entrypoint] WARNING: not running as root; cannot activate firewall" >&2
   fi
-else
-  echo "[entrypoint] WARNING: not running as root; cannot activate firewall" >&2
-fi
 
-exec sleep infinity
+  exec sleep infinity
+}
+
+# `--source-only` lets the bats suite load the functions without running them.
+if [[ "${1:-}" != "--source-only" ]]; then
+  main "$@"
+fi

@@ -5,7 +5,8 @@
 # Adds a `claude` container alongside the standard ddev `web` service.
 # The container's PID 1 (entrypoint.sh, run as root) activates the outbound
 # firewall at start, then idles with `sleep infinity`. The actual Claude Code
-# session is launched on demand, as uid 1000, by `ddev claude`.
+# session is launched on demand, as the unprivileged `claude` user (remapped
+# to the host's uid/gid at start — see entrypoint.sh), by `ddev claude`.
 # ---------------------------------------------------------------------------
 services:
     claude:
@@ -13,17 +14,15 @@ services:
             context: ./claude
         container_name: ddev-${DDEV_SITENAME}-claude
         # Run PID 1 as root so entrypoint.sh can configure iptables/ipset at
-        # start. Interactive Claude sessions are still uid 1000 — the `ddev
+        # start. Interactive Claude sessions still run unprivileged — the `ddev
         # claude` host command always execs with `--user claude`.
         user: root
         working_dir: /var/www/html
-        volumes:
-            - ../:/var/www/html
-            # State (auth, settings, history) lives in the project tree at
-            # .ddev/.claude/ — visible/inspectable from the host. Bootstrap
-            # is done in install.yaml's pre_install_actions.
-            - ../.ddev/.claude:/home/claude/.claude
-            - ../.ddev/.claude/bash_history.d:/home/claude/.bash_history.d
+        # Volumes are supplied by the generated
+        # .ddev/docker-compose.claude-mounts.yaml, because the mount topology
+        # depends on whether Mutagen is enabled for this project. DDEV merges
+        # every .ddev/docker-compose.*.yaml file; an override written anywhere
+        # else is silently ignored.
         environment:
             - ANTHROPIC_API_KEY
             - PLAYWRIGHT_BASE_URL=https://web
@@ -31,6 +30,12 @@ services:
             - GITHUB_PERSONAL_ACCESS_TOKEN
             - GH_TOKEN=${GITHUB_PERSONAL_ACCESS_TOKEN:-}
             - EXTRA_ALLOWED_DOMAINS
+            # DDEV always sets these to the host user's uid/gid (e.g. 501/20 on
+            # macOS). entrypoint.sh remaps the `claude` user to match at start,
+            # so the agent has real POSIX access to project files under the
+            # Mutagen-synced volume, which DDEV populates with host ownership.
+            - DDEV_UID
+            - DDEV_GID
         cap_add:
             - NET_ADMIN
             - NET_RAW

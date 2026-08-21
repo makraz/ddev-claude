@@ -7,7 +7,7 @@
 
 ## Overview
 
-This add-on integrates [Claude Code](https://docs.claude.com/en/docs/claude-code/overview), Anthropic's AI coding CLI, into your [DDEV](https://ddev.com) project as a **sandboxed sidecar container**. Claude runs with `--dangerously-skip-permissions` (YOLO mode) safely contained behind an iptables + ipset + dnsmasq firewall, so an agent off the rails cannot exfiltrate your `.env`, your SSH keys, or anything else outside the project tree.
+This add-on integrates [Claude Code](https://docs.claude.com/en/docs/claude-code/overview), Anthropic's AI coding CLI, into your [DDEV](https://ddev.com) project as a **sandboxed sidecar container**. Claude runs with `--dangerously-skip-permissions` (YOLO mode) safely contained behind an iptables + ipset + dnsmasq firewall, so an agent off the rails cannot reach hosts you have not allow-listed. Note what that does **not** cover: your project tree — including `.env` — is readable by the agent by design, and the firewall bounds *where* traffic goes, not *what* leaves through a destination you allowed. Read [SECURITY.md](SECURITY.md) before trusting the sandbox with secrets.
 
 The default sidecar is **minimum viable**: Claude Code + firewall on a pre-built `debian:bookworm-slim` base image. Project-specific tools (PHP, gh, Playwright, etc.) are opt-in via a small extras catalog or a Dockerfile escape hatch.
 
@@ -36,10 +36,11 @@ After `ddev add-on get`, commit the changes to your project's `.ddev/` directory
 | `ddev claude shell` | Drop into bash inside the sidecar (firewall active). |
 | `ddev claude exec <cmd>` | Run one command in the sidecar non-interactively. |
 | `ddev claude rebuild` | Regenerate `.ddev/claude/Dockerfile` after editing `.ddev/claude.yaml`. |
+| `ddev claude state [dir]` | Copy the sidecar's `~/.claude` out to a directory (default `.ddev/.claude.export`). |
 | `ddev claude help` | Print the help text. |
 | `ddev claude <args>` | Anything else passes through to the `claude` CLI (e.g. `--resume`). |
 
-The sidecar is reachable as the `claude` service on the DDEV default network. Auth tokens and settings persist at `.ddev/.claude/` (gitignored by default).
+The sidecar is reachable as the `claude` service on the DDEV default network. Claude's state (auth, session history, plugins) lives in a Docker volume, `${DDEV_SITENAME}_claude_state`, seeded once from `.ddev/.claude/` on first start after upgrading. `.credentials.json` is snapshotted back to `.ddev/.claude/` when a session exits, so auth survives even if the volume is removed. Copy the whole state out with `ddev claude state [dir]`.
 
 ### Environment variables
 
@@ -53,28 +54,80 @@ Set on your host shell before `ddev start` / `ddev restart`. The sidecar's `dock
 | `PLAYWRIGHT_BASE_URL` | `https://web` | Pre-set inside the container so Playwright/MCP fragments added via the escape hatch hit the DDEV `web` service by default. Override on the host shell if needed. |
 | `CLAUDE_SAFE` | `0` | Read by the `ddev claude` host command. Set to `1` to opt out of YOLO mode for a single invocation (equivalent to `ddev claude safe`). |
 
-## Configuration
+## Performance
 
-Per-project configuration lives in `.ddev/claude.yaml` (user-editable):
+When Mutagen is enabled the sidecar reads the project through DDEV's synced
+Docker volume rather than a host bind mount — measured at 0.065 s vs 28.4 s on
+content-heavy operations like a `grep` over `vendor/`. Measured as the agent on
+one host (macOS, OrbStack, DDEV v1.25.3, 86 MB / 13,017-file corpus) — one
+machine's result, not a guarantee. Reproduce it with:
 
-```yaml
-# Available extras: php
-extras:
-  - php
-
-# Additional outbound domains the runtime firewall should allow.
-extra_allowed_domains:
-  - sentry.io
-  - api.stripe.com
+```bash
+docker exec --user claude ddev-<project>-claude bash -c '
+  grep -rl "class " /var/www/html/vendor | wc -l   # sanity: must be non-zero
+  time grep -rl "class " /var/www/html/vendor >/dev/null 2>&1'
 ```
 
-If the file is absent or both lists are empty, the sidecar is built minimum-viable.
+Run it as the agent, not as root: root can read files the agent cannot, so a
+root-side measurement can look fast while the agent has no access at all.
+
+`ddev claude` refuses to start while the Mutagen sync is still staging, because
+an agent pointed at a half-synced tree reports that your files do not exist.
+
+## Configuration
+
+`.ddev/claude.yaml` accepts five keys. Block-style lists only; `extras: [php]`
+is a parse error.
+
+| Key                     | Type   | Default                                              |
+| ----------------------- | ------ | ---------------------------------------------------- |
+| `extras`                | list   | none — available: `php`, `python`, `node`             |
+| `extra_allowed_domains` | list   | none                                                  |
+| `tools`                 | list   | `Read`, `Write`, `Bash`, `Skill`                      |
+| `plugins`               | list   | `superpowers`, `code-review`, `gitlab`, `code-simplifier` |
+| `mount_mode`            | scalar | `auto` — also `mutagen`, `bind`                       |
+
+`tools` is an allow-list over Claude Code's **built-in** tool set. The default
+deliberately excludes `Edit`, `Grep`, `Glob`, `Task`, `WebFetch`, `WebSearch`,
+`NotebookEdit`, `TodoWrite` and `SlashCommand`. `Skill` is included because
+`superpowers` is enabled by default and exists to be invoked through it.
+
+The CLI scopes `--tools` to the built-in set, so whether it also constrains MCP
+tools is unverified — do not rely on `tools:` to disable an MCP server. Omit the
+server instead.
+
+Dropping `Edit` has a real cost: every change becomes a whole-file `Write`,
+which spends output tokens proportional to file size and risks losing unrelated
+content in large files. Add `Edit` back if that trade is wrong for your project.
+Add `Edit` to the `tools:` list in `.ddev/claude.yaml`, then `ddev claude rebuild && ddev restart`.
+
+`tools` and `plugins` are baked into the image at root-owned paths and applied by
+a `claude` shim that sits ahead of the real binary on `PATH`. Changing either
+needs:
+
+```bash
+ddev claude rebuild && ddev restart
+```
+
+**This is a default and a cost control, not a containment boundary.** Two things
+bypass it by design: a *login* shell (`bash -l`, `su - claude`) sources
+`~/.profile`, which puts the real binary ahead of the shim; and because `Bash` is
+in the default tool set, the agent can invoke `/home/claude/.local/bin/claude`
+directly whenever it likes. The shim runs as the same user as the agent, so no
+arrangement here could prevent that. Use `tools:` to shape what the agent reaches
+for by default and what a session costs — not to contain it.
+
+The boundaries that *are* real, and are unaffected: the outbound firewall, the
+unprivileged uid, and the root-owned files under `/etc/claude-sandbox/` and
+`/etc/claude-firewall/`.
 
 ### Available extras
 
 | Extra | What it installs | Adds to firewall allow-list |
 | --- | --- | --- |
 | `php` | PHP 8.5 CLI + Composer + common extensions (bcmath, curl, gd, intl, mbstring, mysql, soap, xml, xsl, zip) via Ondřej Surý's apt repo. | `packagist.org`, `repo.packagist.org` |
+| `python` | CPython 3 (`python3`, `python3-venv`, `python3-pip`) from Debian's own repo, for Python-backed Claude Code plugins (e.g. `remember`, `security-guidance`). No third-party apt repo, so no additional signing key to pin and trust, unlike the `php` extra which must trust Sury. | `pypi.org`, `files.pythonhosted.org` |
+| `node` | Node.js and npm from Debian bookworm (Node 18.x), for Node-backed Claude Code plugins (e.g. `php-lsp`, `skill-creator`). Debian's own packages, for the same reason as `python`: no third-party NodeSource key to pin and trust. | `registry.npmjs.org` |
 
 Edit `.ddev/claude.yaml`, run `ddev claude rebuild` (or `ddev restart`), and the image is regenerated.
 
@@ -148,7 +201,7 @@ A `claude` sidecar built from a pre-built multi-arch base image (`ghcr.io/makraz
 - Claude Code CLI (native binary, installed at image build time and version-pinned per release).
 - `git`, `bash`, `sudo`, `curl`, `ca-certificates`.
 - `iptables`, `ipset`, `dnsmasq`, `dnsutils`, `iproute2` for the firewall stack.
-- The unprivileged `claude` user (uid 1000) with a NOPASSWD sudoers entry scoped to `/usr/local/bin/init-firewall.sh`.
+- The unprivileged `claude` user (uid 1000 in the base image, remapped to the host's uid/gid at container start — see below) with a NOPASSWD sudoers entry scoped to `/usr/local/bin/init-firewall.sh`.
 
 An outbound firewall (default-DROP policy) that allows only:
 
@@ -180,11 +233,11 @@ The firewall is activated **at container start** by `entrypoint.sh` (PID 1, runn
 1. **ipsets** — `allowed-ipv4` (hash:ip) and `allowed-net` (hash:net).
 2. **Initial DNS resolution** — `dig` resolves the default + extra domains, populating `allowed-ipv4`.
 3. **dnsmasq** — listens on `127.0.0.1`, upstreams to `127.0.0.11` (Docker's embedded DNS, so DDEV service names like `web`/`db` resolve), `1.1.1.1`, `8.8.8.8`. Each allow-listed domain is bound via `ipset=/<domain>/allowed-ipv4`, so future resolutions automatically extend the allow-list — handles CDN IP rotation.
-4. **iptables** — default policy DROP on INPUT/OUTPUT/FORWARD. ACCEPT only loopback, established/related, DNS (port 53), the two ipsets, the host gateway, and inbound 80/443.
+4. **iptables** — default policy DROP on INPUT/OUTPUT/FORWARD. ACCEPT only loopback, established/related, port 53 **to the configured DNS upstreams only**, the two ipsets, the host gateway, and inbound 80/443.
 5. **IPv6** — dropped entirely via `ip6tables`. If `ip6tables` is unavailable but the container has an IPv6 default route, `init-firewall.sh` **fails loudly** rather than leave v6 egress unfiltered.
 6. **Smoke tests** — reachability checks for github (must succeed) and `example.com` (must fail).
 
-The outbound allow-list is read **only from root-owned files** (`/etc/claude-firewall/extra-domains.list`, baked into the image from `.ddev/claude.yaml` at build; and `/etc/claude-firewall/runtime-domains.list`, written from `EXTRA_ALLOWED_DOMAINS` at start). Both live outside the bind-mounted project tree, and the script ignores its own environment, so the unprivileged agent cannot widen its egress by editing a file or re-running the firewall via `sudo`. Changing the `.ddev/claude.yaml` domains therefore requires `ddev claude rebuild` + `ddev restart`.
+The outbound allow-list is read **only from root-owned files** (`/etc/claude-firewall/extra-domains.list`, baked into the image from `.ddev/claude.yaml` at build; and `/etc/claude-firewall/runtime-domains.list`, written from `EXTRA_ALLOWED_DOMAINS` at start). Both live outside the project tree the agent can reach (whether that is the Mutagen volume or a bind mount), and the script ignores its own environment, so the unprivileged agent cannot widen its egress by editing a file or re-running the firewall via `sudo`. Changing the `.ddev/claude.yaml` domains therefore requires `ddev claude rebuild` + `ddev restart`.
 
 > **The firewall bounds _where_ traffic goes, not _what_ leaves through allowed hosts.** The default allow-list includes GitHub, and the sidecar holds the agent's `GH_TOKEN`/`GITHUB_PERSONAL_ACCESS_TOKEN` — so a determined or compromised agent can still exfiltrate over an allowed channel (e.g. push a repo or gist). Treat it as a guard against *accidental* egress, not a barrier against a determined exfiltrator; keep the allow-list and your token scopes narrow. See [SECURITY.md](SECURITY.md#what-the-firewall-does-not-protect-against) for the full limitations.
 
@@ -215,10 +268,11 @@ gh release create v0.3.0-beta.1 --prerelease --notes-file release-notes.md
 ## Known limitations
 
 - **No IPv6**: dropped entirely. Extend `init-firewall.sh` if dual-stack is required.
-- **DNS open on port 53**: required for dnsmasq upstreams; a determined agent could in theory use DNS tunneling for exfiltration.
+- **DNS tunnelling through an allowed resolver**: port 53 is restricted to the configured upstreams (v0.4.0), so a raw socket to an arbitrary host on 53 is blocked — but an agent can still encode data into queries for a domain whose nameserver an attacker controls. Inherent to permitting recursive DNS.
+- **ICMP echo is unrestricted by destination**: a low-bandwidth ICMP tunnel to an arbitrary host is constructible. Not yet narrowed; see `SECURITY.md`.
 - **`.git` and `.env*` are bind-mounted**: the agent can read (and potentially commit) anything in your project directory. Keep secrets out of the working tree, or use `CLAUDE_SAFE=1` for untrusted tasks.
-- **UID 1000 hardcoded**: the `claude` user inside the container is uid 1000. If your host user uses a different uid, file ownership may look unusual on `.ddev/.claude/`.
-- **`.ddev/.claude/` holds auth state**: a determined agent could plant configuration there (e.g. a malicious MCP entry in `~/.claude/settings.json`) that runs in the next session. Such code still runs under the same firewall + uid, so it cannot break out, but the persistence vector is real.
+- **Agent uid is remapped to the host's, never root**: the `claude` user is built at uid 1000 in the base image, but `entrypoint.sh` remaps it to `DDEV_UID`/`DDEV_GID` (the host user's uid/gid, as DDEV's own `web` container also uses) at every container start — this is what lets the agent actually read/write the project under a Mutagen-synced volume, which DDEV populates with host ownership. The remap never targets uid/gid 0, and is skipped (with a warning) if the target uid/gid already belongs to a different account in the container.
+- **The state volume holds auth state**: a determined agent could plant configuration in its own `~/.claude/settings.json` (e.g. a malicious MCP entry) that runs in the next session. Such code still runs under the same firewall + uid, so it cannot break out, but the persistence vector is real. Note the addon no longer overwrites that file, so nothing resets it between sessions.
 
 ## Removing
 
@@ -231,6 +285,7 @@ Add-on-managed files are removed. User-managed files are preserved (delete manua
 
 ```bash
 rm -rf .ddev/claude.yaml .ddev/.claude/ .ddev/claude.local/
+docker volume rm "$(basename "$PWD")_claude_state"   # auth + session history (project name = directory name by default)
 ```
 
 ## Credits

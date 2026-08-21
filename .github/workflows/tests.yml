@@ -19,7 +19,7 @@ jobs:
     env:
       DDEV_NONINTERACTIVE: 'true'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install DDEV
         run: |
@@ -43,4 +43,6 @@ jobs:
       - name: Run tests
         run: |
           bats tests/build-image.bats
+          bats tests/shim.bats
+          bats tests/entrypoint.bats
           bats tests/test.bats

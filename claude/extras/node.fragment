@@ -1,0 +1,13 @@
+#ddev-generated
+# Extra: node — Node.js and npm from Debian bookworm (Node 18.x), for
+# Node-backed Claude Code plugins (e.g. php-lsp, skill-creator).
+#
+# Debian's packages are used deliberately, for the same reason as the `python`
+# extra: adding NodeSource would mean pinning and trusting another apt signing
+# key. If a plugin ever needs a newer Node than bookworm ships, that is a
+# reason to add a pinned NodeSource fragment then — not to add it pre-emptively.
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      nodejs \
+      npm \
+ && rm -rf /var/lib/apt/lists/*

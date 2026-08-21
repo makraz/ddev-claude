@@ -15,7 +15,7 @@ jobs:
     name: build & push base image
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
@@ -36,7 +36,11 @@ jobs:
             apt-get update -qq && apt-get install -y -qq curl ca-certificates >/dev/null &&
             curl -fsSL https://claude.ai/install.sh | bash >/dev/null &&
             ~/.local/bin/claude --version
-          ' | head -1)
+          ' | head -1 | awk '{print $1}')
+          if ! printf '%s' "$CLAUDE_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "could not resolve a semver from the installer: '$CLAUDE_VERSION'" >&2
+            exit 1
+          fi
           echo "CLAUDE_VERSION=$CLAUDE_VERSION" >> "$GITHUB_ENV"
           echo "Resolved Claude Code version: $CLAUDE_VERSION"
 
@@ -46,6 +50,16 @@ jobs:
           context: image
           platforms: linux/amd64,linux/arm64
           push: true
+          # Pin the agent version for BOTH architectures from a single resolved
+          # value. Without this each arch runs the installer independently and an
+          # upstream release mid-build would ship two different versions under
+          # one manifest — and the label below would describe neither reliably.
+          build-args: |
+            CLAUDE_VERSION=${{ env.CLAUDE_VERSION }}
+          # Signed build provenance + SBOM, so a user pulling this image can
+          # verify it was built from this repo at this tag, and see what is in it.
+          provenance: mode=max
+          sbom: true
           tags: |
             ghcr.io/${{ github.repository_owner }}/ddev-claude-base:${{ github.ref_name }}
           labels: |

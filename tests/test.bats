@@ -11,6 +11,7 @@
 
 setup() {
   export DIR="$( cd "$( dirname "$BATS_TEST_FILENAME" )" >/dev/null 2>&1 && pwd )/.."
+  export REPO="$( cd "$( dirname "$BATS_TEST_FILENAME" )" >/dev/null 2>&1 && pwd )/.."
   export PROJNAME="claude-test"
   export TESTDIR="$(mktemp -d)"
   export DDEV_NONINTERACTIVE=true
@@ -36,12 +37,35 @@ in_sidecar() {
   ddev exec -s claude "$@"
 }
 
+# `ddev restart` returns once the containers are up — NOT once entrypoint.sh has
+# finished. The entrypoint remaps the user, seeds the state volume, then runs the
+# full firewall init (which resolves every allow-listed domain over DNS), and only
+# then writes the ready marker. That takes a few seconds, so any test that probes
+# the firewall immediately after a restart is racing it.
+#
+# This is what made tests 2/3/4/6/9 flaky: they read as "the firewall is broken"
+# when the firewall simply had not finished coming up. Wait for the marker the
+# entrypoint itself writes, rather than sleeping a guessed interval.
+wait_for_firewall() {
+  local container="ddev-${PROJNAME}-claude" i
+  for i in $(seq 1 60); do
+    if docker exec "$container" test -f /run/claude-firewall.ready 2>/dev/null; then
+      return 0
+    fi
+    sleep 2
+  done
+  echo "timed out after 120s waiting for /run/claude-firewall.ready" >&2
+  docker logs "$container" 2>&1 | tail -20 >&2
+  return 1
+}
+
 # ===========================================================================
 # Install + basic health
 # ===========================================================================
 @test "install: addon installs and sidecar comes up" {
   install_addon
   ddev restart >/dev/null
+  wait_for_firewall
 
   # Compose fragment
   [ -f "$TESTDIR/.ddev/docker-compose.claude.yaml" ]
@@ -66,6 +90,7 @@ in_sidecar() {
 @test "isolation: default sidecar passes all 6 invariants" {
   install_addon
   ddev restart >/dev/null
+  wait_for_firewall
   # Activate firewall (normally done by `ddev claude`; we trigger it directly).
   docker exec "ddev-${PROJNAME}-claude" sudo /usr/local/bin/init-firewall.sh >/dev/null 2>&1
 
@@ -93,10 +118,13 @@ in_sidecar() {
   [ "$status" -eq 0 ]
   [ "$output" != "000" ]
 
-  # 4. agent runs as uid 1000
+  # 4. agent is never root, and matches the host uid where the test
+  # environment makes that knowable (the uid running `ddev`/bats here IS the
+  # host uid DDEV forwards as DDEV_UID, so it is knowable and asserted).
   run docker exec --user claude "ddev-${PROJNAME}-claude" id -u
   [ "$status" -eq 0 ]
-  [ "$output" = "1000" ]
+  [ "$output" != "0" ]
+  [ "$output" = "$(id -u)" ]
 
   # 5. host home paths leak nowhere
   run docker exec --user claude "ddev-${PROJNAME}-claude" sh -c 'ls /Users 2>/dev/null; ls /home/'"$USER"' 2>/dev/null'
@@ -114,6 +142,7 @@ extra_allowed_domains:
   - example.com
 YAML
   ddev restart >/dev/null
+  wait_for_firewall
   docker exec "ddev-${PROJNAME}-claude" sudo /usr/local/bin/init-firewall.sh >/dev/null 2>&1
 
   run docker exec --user claude "ddev-${PROJNAME}-claude" curl --max-time 5 -s -o /dev/null -w '%{http_code}' https://example.com
@@ -127,6 +156,7 @@ YAML
   # root, trusted compose env) — so it must be set BEFORE `ddev restart`.
   export EXTRA_ALLOWED_DOMAINS="example.com"
   ddev restart >/dev/null
+  wait_for_firewall
 
   run docker exec --user claude "ddev-${PROJNAME}-claude" curl --max-time 5 -s -o /dev/null -w '%{http_code}' https://example.com
   [ "$status" -eq 0 ]
@@ -136,6 +166,7 @@ YAML
 @test "isolation: firewall is active at container start (no ddev claude needed)" {
   install_addon
   ddev restart >/dev/null
+  wait_for_firewall
   # Deliberately do NOT run init-firewall.sh by hand — entrypoint.sh should
   # have activated it at container start.
 
@@ -154,6 +185,7 @@ YAML
 @test "isolation: --ensure fast-paths when healthy but rebuilds when not" {
   install_addon
   ddev restart >/dev/null
+  wait_for_firewall
   # entrypoint.sh ran a full init at start, so the ready marker exists.
   run docker exec "ddev-${PROJNAME}-claude" test -f /run/claude-firewall.ready
   [ "$status" -eq 0 ]
@@ -181,6 +213,7 @@ YAML
 @test "isolation: agent cannot tamper with the allow-list to widen egress" {
   install_addon
   ddev restart >/dev/null
+  wait_for_firewall
 
   # The build-baked allow-list lives at a root-owned path the agent can't write.
   run docker exec --user claude "ddev-${PROJNAME}-claude" sh -c \
@@ -202,6 +235,7 @@ YAML
 @test "build: no extras → minimal image (no php, no gh)" {
   install_addon
   ddev restart >/dev/null
+  wait_for_firewall
 
   run docker exec "ddev-${PROJNAME}-claude" sh -c 'command -v php'
   [ "$status" -ne 0 ]
@@ -218,6 +252,7 @@ extras:
   - php
 YAML
   ddev restart >/dev/null
+  wait_for_firewall
 
   # php and composer installed
   run docker exec "ddev-${PROJNAME}-claude" php -v
@@ -241,6 +276,7 @@ USER root
 RUN echo escape-hatch-marker > /opt/escape-hatch-marker
 F
   ddev restart >/dev/null
+  wait_for_firewall
 
   run docker exec "ddev-${PROJNAME}-claude" cat /opt/escape-hatch-marker
   [ "$status" -eq 0 ]
@@ -258,6 +294,7 @@ YAML
   mkdir -p "$TESTDIR/.ddev/claude.local"
   echo "marker" > "$TESTDIR/.ddev/claude.local/userfile.txt"
   ddev restart >/dev/null
+  wait_for_firewall
 
   run ddev add-on remove claude
   [ "$status" -eq 0 ]
@@ -282,6 +319,7 @@ YAML
 @test "cli: ddev claude help lists subcommands" {
   install_addon
   ddev restart >/dev/null
+  wait_for_firewall
 
   run ddev claude help
   [ "$status" -eq 0 ]
@@ -291,18 +329,35 @@ YAML
   [[ "$output" =~ "ddev claude rebuild" ]]
 }
 
-@test "cli: ddev claude exec runs in sidecar as uid 1000" {
+@test "cli: ddev claude exec runs in sidecar as an unprivileged, host-matching uid" {
   install_addon
   ddev restart >/dev/null
+  wait_for_firewall
 
   run ddev claude exec id -u
   [ "$status" -eq 0 ]
-  [ "$output" = "1000" ]
+  [ "$output" != "0" ]
+  [ "$output" = "$(id -u)" ]
+}
+
+@test "cli: ddev claude exec can read and write a file under /var/www/html" {
+  install_addon
+  ddev restart >/dev/null
+  wait_for_firewall
+
+  # This is the property that silently broke under Mutagen: DDEV populates
+  # the synced volume with host ownership at mode 0600/0700, so a container
+  # user whose uid does not match the host's gets Permission denied on
+  # read, write, AND traversal, even though root can see the files fine.
+  run ddev claude exec sh -c 'echo hello > .ddev-claude-rw-probe && cat .ddev-claude-rw-probe && rm .ddev-claude-rw-probe'
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "hello" ]]
 }
 
 @test "cli: ddev claude exec propagates exit codes" {
   install_addon
   ddev restart >/dev/null
+  wait_for_firewall
 
   run ddev claude exec false
   [ "$status" -ne 0 ]
@@ -311,6 +366,7 @@ YAML
 @test "cli: ddev claude rebuild regenerates Dockerfile" {
   install_addon
   ddev restart >/dev/null
+  wait_for_firewall
 
   # Capture stamp before
   stamp1="$(cat "$TESTDIR/.ddev/claude/.build-stamp")"
@@ -328,4 +384,10 @@ YAML
 
   # Dockerfile now mentions packages.sury.org (php fragment marker)
   grep -qF 'packages.sury.org' "$TESTDIR/.ddev/claude/Dockerfile"
+}
+
+@test "host command: help mentions the state subcommand" {
+  run bash "${REPO}/commands/host/claude" help
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "ddev claude state" ]]
 }

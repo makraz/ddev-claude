@@ -207,3 +207,325 @@ YAML
   mtime2="$(mtime "$PROJ/.ddev/claude/Dockerfile")"
   [ "$mtime2" -gt "$mtime1" ]
 }
+
+@test "parser: mount_mode scalar is accepted" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+mount_mode: bind
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+}
+
+@test "parser: invalid mount_mode → exits non-zero with clear error" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+mount_mode: turbo
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "invalid mount_mode 'turbo'" ]]
+}
+
+@test "parser: list key given a scalar value → clear error" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+extras: php
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "expects a block list" ]]
+}
+
+@test "parser: 'extras: []' empty-list shorthand still works" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+extras: []
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+}
+
+@test "parser: tools and plugins lists are accepted" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+tools:
+  - Read
+  - Bash
+plugins:
+  - superpowers
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+}
+
+@test "parser: unrecognised tool name warns but exits 0" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+tools:
+  - Read
+  - Telepathy
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "unrecognised tool 'Telepathy'" ]]
+}
+
+@test "parser: malformed plugin name → exits non-zero" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+plugins:
+  - "bad name!"
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "invalid plugin" ]]
+}
+
+@test "parser: unknown top-level scalar key → clear error" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+nonsense: 1
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "unknown key 'nonsense'" ]]
+}
+
+@test "generator: absent tools key → default four tools in tools.list" {
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  run cat "$PROJ/.ddev/claude/tools.list"
+  [ "$output" = "Read
+Write
+Bash
+Skill" ]
+}
+
+@test "generator: explicit tools key overrides the default" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+tools:
+  - Read
+  - Bash
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  run cat "$PROJ/.ddev/claude/tools.list"
+  [ "$output" = "Read
+Bash" ]
+}
+
+@test "generator: absent plugins key → default four in settings.json" {
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  run grep -c '@claude-plugins-official": true' "$PROJ/.ddev/claude/settings.json"
+  [ "$output" -eq 4 ]
+}
+
+@test "generator: bare plugin name gains the default marketplace" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+plugins:
+  - superpowers
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  run grep -F '"superpowers@claude-plugins-official": true' "$PROJ/.ddev/claude/settings.json"
+  [ "$status" -eq 0 ]
+}
+
+@test "generator: explicit marketplace is preserved" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+plugins:
+  - mything@my-marketplace
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  run grep -F '"mything@my-marketplace": true' "$PROJ/.ddev/claude/settings.json"
+  [ "$status" -eq 0 ]
+}
+
+@test "generator: changing tools changes the build stamp" {
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  local first
+  first="$(cat "$PROJ/.ddev/claude/.build-stamp")"
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+tools:
+  - Read
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$PROJ/.ddev/claude/.build-stamp")" != "$first" ]
+}
+
+@test "generator: changing plugins changes the build stamp" {
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  local first
+  first="$(cat "$PROJ/.ddev/claude/.build-stamp")"
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+plugins:
+  - code-review
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$PROJ/.ddev/claude/.build-stamp")" != "$first" ]
+}
+
+@test "mount: mount_mode bind → bind override, no mutagen volume" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+mount_mode: bind
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  run grep -F '../:/var/www/html' "$PROJ/.ddev/docker-compose.claude-mounts.yaml"
+  [ "$status" -eq 0 ]
+  run grep -F 'project_mutagen' "$PROJ/.ddev/docker-compose.claude-mounts.yaml"
+  [ "$status" -ne 0 ]
+  [ "$(cat "$PROJ/.ddev/claude/.mount-mode")" = "bind" ]
+}
+
+@test "mount: mount_mode mutagen → volume override, no root bind" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+mount_mode: mutagen
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  run grep -F 'source: project_mutagen' "$PROJ/.ddev/docker-compose.claude-mounts.yaml"
+  [ "$status" -eq 0 ]
+  run grep -Fx '            - ../:/var/www/html' "$PROJ/.ddev/docker-compose.claude-mounts.yaml"
+  [ "$status" -ne 0 ]
+  [ "$(cat "$PROJ/.ddev/claude/.mount-mode")" = "mutagen" ]
+}
+
+@test "mount: both overrides always declare the claude_state volume" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+mount_mode: bind
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  run grep -F 'claude_state' "$PROJ/.ddev/docker-compose.claude-mounts.yaml"
+  [ "$status" -eq 0 ]
+}
+
+# Regression guard. The pre-v0.4.0 docker-compose.claude.yaml mounted
+# ../.ddev/.claude/bash_history.d at /home/claude/.bash_history.d. Task 3
+# replaced the whole volumes: block and the first draft dropped this mount
+# entirely — silently losing shell-history persistence across restarts. The
+# base image sets that path and image/Dockerfile is frozen this release, so
+# the mount has to come from the generated override.
+@test "mount: both variants mount the bash history dir" {
+  for mode in bind mutagen; do
+    printf 'mount_mode: %s\n' "$mode" > "$PROJ/.ddev/claude.yaml"
+    run "$PROJ/.ddev/claude/build-image.sh"
+    [ "$status" -eq 0 ]
+    run grep -Fx '            - ../.ddev/.claude/bash_history.d:/home/claude/.bash_history.d' \
+      "$PROJ/.ddev/docker-compose.claude-mounts.yaml"
+    [ "$status" -eq 0 ]
+  done
+}
+
+@test "mount: auto reads performance_mode from project config.yaml" {
+  printf 'name: demo\nperformance_mode: mutagen\n' > "$PROJ/.ddev/config.yaml"
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+mount_mode: auto
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$PROJ/.ddev/claude/.mount-mode")" = "mutagen" ]
+}
+
+@test "mount: auto honours performance_mode none in project config.yaml" {
+  printf 'name: demo\nperformance_mode: none\n' > "$PROJ/.ddev/config.yaml"
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$PROJ/.ddev/claude/.mount-mode")" = "bind" ]
+}
+
+@test "mount: auto ignores a commented-out performance_mode" {
+  printf 'name: demo\n# performance_mode: mutagen\n' > "$PROJ/.ddev/config.yaml"
+  export DDEV_GLOBAL_DIR="$PROJ/fake-global"
+  mkdir -p "$DDEV_GLOBAL_DIR"
+  printf 'performance_mode: none\n' > "$DDEV_GLOBAL_DIR/global_config.yaml"
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$PROJ/.ddev/claude/.mount-mode")" = "bind" ]
+}
+
+@test "mount: changing the resolved mount mode changes the build stamp" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+mount_mode: bind
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  local first
+  first="$(cat "$PROJ/.ddev/claude/.build-stamp")"
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+mount_mode: mutagen
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$(cat "$PROJ/.ddev/claude/.build-stamp")" != "$first" ]
+}
+
+@test "extras: python fragment is selectable and contributes pypi domains" {
+  cp "$REPO/claude/extras/python.fragment" "$PROJ/.ddev/claude/extras/"
+  cp "$REPO/claude/extras/python.domains"  "$PROJ/.ddev/claude/extras/"
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+extras:
+  - python
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  run grep -F 'python3' "$PROJ/.ddev/claude/Dockerfile"
+  [ "$status" -eq 0 ]
+  run grep -Fx 'pypi.org' "$PROJ/.ddev/claude/extra-domains.list"
+  [ "$status" -eq 0 ]
+}
+
+@test "extras: node fragment is selectable and contributes the npm registry" {
+  cp "$REPO/claude/extras/node.fragment" "$PROJ/.ddev/claude/extras/"
+  cp "$REPO/claude/extras/node.domains"  "$PROJ/.ddev/claude/extras/"
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+extras:
+  - node
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  run grep -Fx 'registry.npmjs.org' "$PROJ/.ddev/claude/extra-domains.list"
+  [ "$status" -eq 0 ]
+}
+
+@test "domains: a non-empty plugin list contributes marketplace hosts" {
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  run grep -Fx 'codeload.github.com' "$PROJ/.ddev/claude/extra-domains.list"
+  [ "$status" -eq 0 ]
+  run grep -Fx 'objects.githubusercontent.com' "$PROJ/.ddev/claude/extra-domains.list"
+  [ "$status" -eq 0 ]
+  run grep -Fx 'raw.githubusercontent.com' "$PROJ/.ddev/claude/extra-domains.list"
+  [ "$status" -eq 0 ]
+}
+
+@test "domains: an empty plugin list contributes no marketplace hosts" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+plugins: []
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  run grep -Fx 'codeload.github.com' "$PROJ/.ddev/claude/extra-domains.list"
+  [ "$status" -ne 0 ]
+}
+
+@test "mount: auto treats project performance_mode 'global' as deferring to the global config" {
+  printf 'name: demo\nperformance_mode: global\n' > "$PROJ/.ddev/config.yaml"
+  export DDEV_GLOBAL_DIR="$PROJ/fake-global"
+  mkdir -p "$DDEV_GLOBAL_DIR"
+  printf 'performance_mode: mutagen\n' > "$DDEV_GLOBAL_DIR/global_config.yaml"
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$PROJ/.ddev/claude/.mount-mode")" = "mutagen" ]
+}
+
+@test "stamp: deleting .mount-mode alone forces regeneration" {
+  cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
+mount_mode: mutagen
+YAML
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  [ -f "$PROJ/.ddev/claude/.mount-mode" ]
+  rm -f "$PROJ/.ddev/claude/.mount-mode"
+  run "$PROJ/.ddev/claude/build-image.sh"
+  [ "$status" -eq 0 ]
+  [ -f "$PROJ/.ddev/claude/.mount-mode" ]
+  [ "$(cat "$PROJ/.ddev/claude/.mount-mode")" = "mutagen" ]
+}

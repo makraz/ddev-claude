@@ -1,0 +1,2 @@
+# Runtime domains for the node extra (read by init-firewall.sh).
+registry.npmjs.org

@@ -6,6 +6,103 @@ All notable changes to this add-on are documented here. This project adheres to
 
 ## [Unreleased]
 
+## [v0.4.0] — 2026-08-21
+
+### Changed — BREAKING
+- The agent's built-in tool set is now restricted. With no `tools:` key in
+  `.ddev/claude.yaml`, the default is `Read`, `Write`, `Bash`, `Skill` —
+  `Edit`, `Grep`, `Glob`, `Task`, `WebFetch`, `WebSearch`, `NotebookEdit`,
+  `TodoWrite` and `SlashCommand` are off. Existing projects with no `tools:` key
+  are affected on upgrade. Add a `tools:` list to opt back in. Applied by a
+  `claude` shim ahead of the real binary on `PATH`, so it covers `ddev claude`,
+  `ddev claude shell`, `ddev claude exec` and plain `docker exec`.
+  **This is a default and a cost control, not a containment boundary:** a login
+  shell (`bash -l`) sources `~/.profile`, which finds the real binary first, and
+  `Bash` in the default set lets the agent invoke that binary directly. The shim
+  runs as the agent's own uid, so nothing here could prevent that. The CLI scopes
+  `--tools` to built-in tools, so its effect on MCP tools is unverified — omit an
+  MCP server rather than relying on `tools:` to disable it.
+- Plugins are now curated. With no `plugins:` key the default is `superpowers`,
+  `code-review`, `gitlab`, `code-simplifier` — the interpreter-free set. This
+  fixes the `FATAL: No working Python found` that Python-backed plugins
+  (`remember`, `security-guidance`) emitted on every `PostToolUse` hook, since
+  the image ships no Python by design.
+- Claude's state moved from `.ddev/.claude/` to a Docker volume
+  (`${DDEV_SITENAME}_claude_state`). It is seeded from the old directory on
+  first start; the old directory is left in place. `ddev claude state` copies
+  the volume back out. `ddev add-on remove claude` does not delete the volume.
+
+### Security
+- Port 53 egress is now restricted by destination. The OUTPUT chain previously
+  accepted all UDP and TCP traffic on port 53 to *any* host, which gave the agent a
+  full bidirectional channel to anything listening on 53 — DNS tunnelling, or simply a
+  raw socket to `attacker:53`. Demonstrated in review against a public resolver that is
+  not in the allow-list. Rules are now scoped to the actual DNS upstreams. Dates to the
+  first release; everything else already went through the ipset allow-list.
+  dnsmasq's `server=` lines and the iptables rules are now generated from one
+  `DNS_UPSTREAMS` array instead of two hand-maintained copies, so they cannot drift —
+  a drift would either break DNS or silently reopen the hole.
+- What remains, and is documented in `SECURITY.md`: DNS tunnelling *through* an
+  allowed recursive resolver, and unrestricted ICMP echo. Both are inherent or
+  pre-existing rather than introduced here.
+
+### Added
+- `python` and `node` extras, for projects that want the Python- or Node-backed
+  plugins. Both install from Debian's own repositories, so neither adds a
+  third-party apt signing key to trust.
+- `tools:`, `plugins:` and `mount_mode:` keys in `.ddev/claude.yaml`.
+  `mount_mode` is the first scalar key the parser accepts.
+- `ddev claude state [dir]` — copy the sidecar's `~/.claude` out to a directory.
+
+### Changed
+- Firewall diagnostics are no longer printed on the success path. `ddev claude`,
+  `shell` and `exec` used to emit `[firewall] …` lines before the command's own
+  output on every invocation. Failures are still surfaced in full.
+- `.credentials.json` is now copied back to `.ddev/.claude/` when a session
+  exits, so authentication survives even if the state volume is deleted. Note
+  this means deleting the volume no longer forces re-authentication — a fresh
+  volume re-seeds the credential file from there.
+- The curated plugin set is applied by passing `--settings` at launch rather than
+  by writing into the agent's `~/.claude/settings.json`. An earlier build of this
+  release overwrote that file on every container start with one containing only
+  `enabledPlugins`, which destroyed any model, hooks, statusline or env settings
+  the user had. The user's file is now never modified. Note the limit of this:
+  `--settings` force-enables the curated set on every launch but cannot
+  force-disable a plugin it does not list, so a plugin the agent enables does
+  persist in its own state. That is the accepted trade for not destroying the
+  user's settings — the plugin layer is a default, not a boundary.
+
+### Fixed
+- The sidecar no longer bind-mounts the project from the host when Mutagen is
+  enabled. It now shares `web`'s synced volume. Measured as the agent on one
+  host (macOS, OrbStack, DDEV v1.25.3, 86 MB / 13,017-file corpus): a `grep` over
+  `vendor/` went from 28.4 s to 0.065 s, and a `find` from 0.68 s to 0.019 s.
+  That is one machine's result, not a guarantee; the README carries the method and
+  the reproduction command. Set `mount_mode: bind` to opt out.
+- `ddev add-on remove claude` never actually deleted the files it generates. Its
+  removal script runs with the working directory set to `.ddev/`, so every
+  `rm -f .ddev/claude/...` resolved one level too deep and silently no-opped —
+  `rm -f` does not error on a missing path. Dates to commit `749d3b3`.
+- `ddev claude exec <cmd>` leaked the firewall's own log output into its stdout,
+  breaking any consumer that parsed the command's output. The health check's
+  output is now captured and shown only if the check fails.
+- `ddev claude` refuses to start while the Mutagen sync is still staging.
+  Previously the agent saw an empty or half-populated `/var/www/html` and
+  reported that files did not exist.
+- The Mutagen-synced volume above is populated with real POSIX ownership from
+  the host (files `0600`, directories `0700`, owned by the host uid) — unlike
+  the bind mount it replaced, which always presented files as owned by
+  whichever container user accessed them. Without a matching uid, the agent
+  (uid 1000) could not read, write, or even traverse the project at all.
+  `entrypoint.sh` now remaps the `claude` user to the host's uid/gid
+  (`DDEV_UID`/`DDEV_GID`, forwarded from `docker-compose.claude.yaml`) at
+  every container start, mirroring what DDEV's own `web` container already
+  does. The remap never targets uid/gid 0 and is skipped, with a warning, if
+  the target uid/gid is already taken by a different account in the
+  container. `ddev claude`'s workspace-readiness check now also probes as the
+  agent (`--user claude`), not root, on every mount mode, so this class of
+  regression cannot pass silently again.
+
 ## [v0.3.0-beta.3] — 2026-06-18
 
 ### Security

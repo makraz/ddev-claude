@@ -1,0 +1,11 @@
+#ddev-generated
+# Extra: python — CPython 3 from Debian, for Python-backed Claude Code plugins
+# (e.g. remember, security-guidance). Debian's own packages are used
+# deliberately: no third-party apt repository means no additional signing key
+# to pin and trust, unlike the `php` extra which must trust Sury.
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3 \
+      python3-venv \
+      python3-pip \
+ && rm -rf /var/lib/apt/lists/*

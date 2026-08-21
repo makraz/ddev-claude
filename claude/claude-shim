@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+#ddev-generated
+# ---------------------------------------------------------------------------
+# claude-shim — installed as /usr/local/bin/claude inside the sidecar.
+#
+# Injects the project's built-in tool allow-list and its curated plugin set,
+# both read from ROOT-OWNED files baked into the image at build time. Because
+# /usr/local/bin precedes /home/claude/.local/bin on PATH, this applies on
+# every normal entry path — `ddev claude`, `ddev claude shell`,
+# `ddev exec -s claude`, and a plain `docker exec`.
+#
+# This is a DEFAULT and a COST CONTROL, not a containment boundary. Two things
+# bypass it by design, and that is accepted:
+#   - a LOGIN shell (`bash -l`, `su - claude`) sources /home/claude/.profile,
+#     which prepends ~/.local/bin to PATH and so finds the real binary first;
+#   - `Bash` is in the default tool set, so the agent can invoke
+#     /home/claude/.local/bin/claude directly whenever it wants.
+# The shim runs as the same uid as the agent, so no arrangement here could
+# prevent that. The real boundaries are elsewhere: the egress firewall, the
+# unprivileged uid, and the root-owned files under /etc/claude-sandbox.
+#
+# The paths below are hardcoded on purpose. Reading them from the environment
+# would let the agent `export` its way to a different tool set without even
+# needing the bypasses above. The bats suite patches these lines into a
+# throwaway copy instead.
+# ---------------------------------------------------------------------------
+set -euo pipefail
+
+REAL=/home/claude/.local/bin/claude
+TOOLS_FILE=/etc/claude-sandbox/tools.list
+SETTINGS_FILE=/etc/claude-sandbox/settings.json
+
+for a in "$@"; do
+  case "$a" in
+    --tools|--tools=*)
+      echo "claude: --tools is fixed by the ddev-claude sandbox." >&2
+      echo "        Edit 'tools:' in .ddev/claude.yaml, then: ddev claude rebuild && ddev restart" >&2
+      exit 64
+      ;;
+  esac
+done
+
+args=()
+if [[ -r "$TOOLS_FILE" ]]; then
+  tools="$(paste -sd, "$TOOLS_FILE")"
+  [[ -n "$tools" ]] && args+=(--tools "$tools")
+fi
+
+# Layer the curated plugin set on at launch rather than writing it into the
+# agent's own ~/.claude/settings.json. Overwriting that file would destroy the
+# user's model, hooks, statusline and env preferences on every container start.
+# `--settings` loads additional settings for this invocation only, so the
+# user's settings.json is never touched.
+#
+# NOTE what this does and does not do: `--settings` force-ENABLES the curated
+# set on every launch, but it cannot force-DISABLE a plugin it does not list.
+# A plugin the agent enables writes to its own ~/.claude/settings.json and
+# therefore DOES persist across launches. That is the accepted trade for not
+# destroying the user's own settings — the plugin layer is a default, not a
+# boundary. To actually pin the set, the generated file would have to emit an
+# explicit `false` for every known-but-uncurated plugin.
+if [[ -r "$SETTINGS_FILE" ]]; then
+  args+=(--settings "$SETTINGS_FILE")
+  # A user-supplied --settings comes later on the command line and wins
+  # outright, dropping the curated set. Unlike --tools we do not reject it —
+  # it is a legitimate flag and this layer is not a security boundary — but
+  # say so, because silently losing plugin curation is confusing.
+  for a in "$@"; do
+    case "$a" in
+      --settings|--settings=*)
+        echo "claude: your --settings overrides the sandbox's curated plugin set." >&2
+        break
+        ;;
+    esac
+  done
+fi
+
+exec "$REAL" "${args[@]+"${args[@]}"}" "$@"

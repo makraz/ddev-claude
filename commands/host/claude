@@ -7,6 +7,7 @@
 ## Example: ddev claude shell
 ## Example: ddev claude exec composer install
 ## Example: ddev claude rebuild
+## Example: ddev claude state
 ## Example: ddev claude help
 ## Example: ddev claude --resume
 ##
@@ -15,6 +16,7 @@
 ##   shell             Drop into bash inside the sidecar
 ##   exec <cmd> ...    Run one command in the sidecar non-interactively
 ##   rebuild           Regenerate .ddev/claude/Dockerfile from .ddev/claude.yaml
+##   state [dir]       Copy the sidecar's ~/.claude out to a directory
 ##   help              Print this help
 ##
 ## Anything else (including flags like --resume) is passed through to the
@@ -24,7 +26,7 @@
 
 set -euo pipefail
 
-CONTAINER="ddev-${DDEV_SITENAME}-claude"
+CONTAINER="ddev-${DDEV_SITENAME:-}-claude"
 
 ensure_running() {
   if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
@@ -46,21 +48,159 @@ ensure_firewall() {
   # The allow-list is read only from root-owned files; EXTRA_ALLOWED_DOMAINS is
   # consumed once, at start, by entrypoint.sh — so set it before `ddev start` /
   # `ddev restart`.
-  docker exec "$CONTAINER" sudo /usr/local/bin/init-firewall.sh --ensure
+  #
+  # init-firewall.sh's log() helper writes to stdout even on the healthy
+  # no-op path, which would otherwise leak into the stdout of whatever
+  # command the caller is running (e.g. `ddev claude exec`). Capture its
+  # combined output ourselves and only emit it (to stderr) when the health
+  # check actually fails, so a real firewall problem still surfaces.
+  local out
+  local status=0
+  out="$(docker exec "$CONTAINER" sudo /usr/local/bin/init-firewall.sh --ensure 2>&1)" || status=$?
+  if [[ "$status" -ne 0 ]]; then
+    printf '%s\n' "$out" >&2
+  fi
+  return "$status"
+}
+
+# Refuse to launch against a project tree that is not actually there.
+#
+# Under Mutagen the sidecar reads the synced volume; while the sync is still
+# scanning or staging, /var/www/html is empty or half-populated and the agent
+# will confidently report that your files do not exist. A wrong answer is worse
+# than a refusal.
+ensure_workspace() {
+  local mode status
+  mode="$(cat "${DDEV_APPROOT}/.ddev/claude/.mount-mode" 2>/dev/null || echo bind)"
+
+  if [[ "$mode" == "mutagen" ]]; then
+    status="$(ddev mutagen status 2>&1 | head -1)"
+    # Allow-list, not deny-list: DDEV's mutagen status vocabulary can gain or
+    # rename states (initializing, halted, paused, waiting, ...) that this
+    # guard has never seen. A deny-list would silently pass on any of those
+    # and let the agent report confidently on a half-synced tree. Only the
+    # one verified settled state passes here; everything else refuses.
+    case "$status" in
+      *watching*)
+        # Settled — fall through to the readability probes below. Returning
+        # here would skip them on the ONLY topology where the uid lockout can
+        # occur, which is exactly the regression they exist to catch.
+        ;;
+      *)
+        echo "error: project files are not ready in the sidecar" >&2
+        echo "       $status" >&2
+        echo "hint:  wait for the sync to settle, then re-run. Watch it with: ddev mutagen status" >&2
+        echo "hint:  or set mount_mode: bind in .ddev/claude.yaml to skip the Mutagen check entirely" >&2
+        exit 1
+        ;;
+    esac
+  fi
+
+  if ! docker exec "$CONTAINER" \
+      bash -c 'ls -A /var/www/html 2>/dev/null | grep -qv -e "^\.git$" -e "^\.ddev$"'; then
+    echo "error: /var/www/html is empty in the sidecar" >&2
+    echo "hint:  inspect it with: ddev claude shell -c 'ls /var/www/html'" >&2
+    exit 1
+  fi
+
+  # The check above runs as ROOT (no --user claude) and only proves files
+  # exist in the container's view of /var/www/html. It says nothing about
+  # whether the unprivileged agent can actually open them. This is not a
+  # theoretical gap: under Mutagen, DDEV populates the synced volume with
+  # real POSIX ownership/mode from the host (files 0600, dirs 0700, owned by
+  # the host uid) — a fully-settled sync is exactly the state that silently
+  # locked the agent out entirely before entrypoint.sh started remapping the
+  # `claude` user to the host's uid/gid. Probe as the agent, on every mount
+  # mode (bind included — a misconfigured remap can break that path too),
+  # so a permission regression never reads as "workspace ready".
+  if ! docker exec --user claude "$CONTAINER" \
+      bash -c 'find /var/www/html -mindepth 1 -maxdepth 2 -type f -readable -print -quit 2>/dev/null | grep -q .'; then
+    local agent_id
+    agent_id="$(docker exec --user claude "$CONTAINER" id 2>&1)"
+    echo "error: the agent cannot read any project files in the sidecar" >&2
+    echo "       docker exec --user claude $CONTAINER id -> $agent_id" >&2
+    echo "hint:  this looks like a uid/gid mismatch between the host and the 'claude'" >&2
+    echo "       user. Check DDEV_UID/DDEV_GID reach the container (docker exec $CONTAINER" >&2
+    echo "       env | grep DDEV_) and that entrypoint.sh's remap ran (docker logs $CONTAINER)." >&2
+    exit 1
+  fi
+}
+
+# Claude Code writes .credentials.json by write-temp-then-rename, which
+# replaces the inode — so a single-file bind mount would keep pointing at the
+# old inode and silently stop updating the host copy. We copy it out on exit
+# instead. Any failure here warns and is otherwise ignored: it must never
+# change the session's exit code.
+#
+# launch_claude both traps this on EXIT/INT/TERM (to cover an interrupt while
+# docker exec is in the foreground) and calls it explicitly after the trap is
+# cleared (to cover the normal exit path). On an interrupt bash runs the trap
+# and then *resumes* the script, so both paths fire for the same session —
+# this flag makes the body idempotent. Plain global, not local, so it
+# survives being set by the trap invocation and checked again by the
+# explicit call.
+_credentials_snapshotted=0
+
+snapshot_credentials() {
+  if [[ "$_credentials_snapshotted" == "1" ]]; then
+    return 0
+  fi
+  _credentials_snapshotted=1
+
+  local dest="${DDEV_APPROOT}/.ddev/.claude"
+  mkdir -p "$dest" 2>/dev/null || return 0
+
+  # Copy to a temp name and only promote it if it is a regular file. The source
+  # lives in the agent's own writable state volume, so the agent controls what
+  # is at that path. `docker cp` does NOT dereference a top-level symlink (so it
+  # cannot be used to read root-owned files out of the container), but it will
+  # faithfully reproduce a symlink, FIFO or directory at a fixed host path.
+  # Validating the type keeps something odd from landing where the next run,
+  # or a user, expects a credentials file.
+  local tmp="${dest}/.credentials.json.snapshot"
+  rm -f "$tmp" 2>/dev/null
+  if ! docker cp "${CONTAINER}:/home/claude/.claude/.credentials.json" "$tmp" >/dev/null 2>&1; then
+    # No credentials file is the normal case for ANTHROPIC_API_KEY users —
+    # Claude Code never writes one, so do not cry wolf on every exit.
+    if docker exec "$CONTAINER" test -e /home/claude/.claude/.credentials.json 2>/dev/null; then
+      echo "warning: could not snapshot credentials from the sidecar" >&2
+    fi
+    rm -f "$tmp" 2>/dev/null
+    return 0
+  fi
+
+  if [[ -f "$tmp" && ! -L "$tmp" ]]; then
+    mv -f "$tmp" "${dest}/.credentials.json" 2>/dev/null \
+      || echo "warning: could not store the credential snapshot" >&2
+  else
+    echo "warning: credential snapshot was not a regular file; discarded" >&2
+    rm -rf "$tmp" 2>/dev/null
+  fi
+  return 0
 }
 
 launch_claude() {
   ensure_running
   ensure_firewall
+  ensure_workspace
+
   local args=()
   if [[ "${CLAUDE_SAFE:-0}" != "1" ]]; then
     args+=(--dangerously-skip-permissions)
   fi
-  exec docker exec -it \
+
+  # Deliberately NOT `exec`: we need to run snapshot_credentials afterwards.
+  trap snapshot_credentials EXIT INT TERM
+  local rc=0
+  docker exec -it \
     --user claude \
     --workdir /var/www/html \
     "$CONTAINER" \
-    claude "${args[@]}" "$@"
+    claude "${args[@]+"${args[@]}"}" "$@" || rc=$?
+  trap - EXIT INT TERM
+
+  snapshot_credentials
+  return "$rc"
 }
 
 rebuild_image() {
@@ -76,6 +216,8 @@ Usage:
   ddev claude shell [args]     Drop into bash inside the sidecar.
   ddev claude exec <cmd>       Run one command in the sidecar non-interactively.
   ddev claude rebuild          Regenerate Dockerfile from .ddev/claude.yaml.
+  ddev claude state [dir]      Copy the sidecar's ~/.claude out to a directory
+                               (default: .ddev/.claude.export).
   ddev claude help             Print this help.
   ddev claude <other args>     Pass through to the claude CLI (e.g. --resume).
 
@@ -83,6 +225,9 @@ Environment:
   CLAUDE_SAFE=1                Opt out of YOLO mode for this invocation.
   EXTRA_ALLOWED_DOMAINS=...    Space-separated extra outbound domains. Consumed
                                at container start — set before 'ddev restart'.
+
+  Tool set and plugins are fixed by .ddev/claude.yaml and baked into the image.
+  Change them with: ddev claude rebuild && ddev restart
 HELP
 }
 
@@ -95,17 +240,28 @@ case "${1:-}" in
     shift
     ensure_running
     ensure_firewall
+    ensure_workspace
     exec docker exec -it --user claude --workdir /var/www/html "$CONTAINER" bash "$@"
     ;;
   exec)
     shift
     ensure_running
     ensure_firewall
+    ensure_workspace
     exec docker exec -i --user claude --workdir /var/www/html "$CONTAINER" "$@"
     ;;
   rebuild)
     shift
     rebuild_image
+    exit 0
+    ;;
+  state)
+    shift
+    ensure_running
+    dest="${1:-${DDEV_APPROOT}/.ddev/.claude.export}"
+    mkdir -p "$dest"
+    docker cp "${CONTAINER}:/home/claude/.claude/." "$dest/"
+    echo "Copied sidecar state to $dest"
     exit 0
     ;;
   help)
