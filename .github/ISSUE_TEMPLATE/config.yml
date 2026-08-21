@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/makraz/ddev-claude/security/advisories/new
+    about: Report firewall bypass, sandbox escape, or secret exposure privately — never in a public issue.
+  - name: DDEV documentation
+    url: https://ddev.readthedocs.io/en/stable/users/extend/additional-services/
+    about: How DDEV add-ons work.

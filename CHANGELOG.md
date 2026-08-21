@@ -4,6 +4,89 @@ All notable changes to this add-on are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and the format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+## [v0.3.0-beta.3] — 2026-06-18
+
+### Security
+- The `php` extra now pins the Sury (`packages.sury.org`) signing key. The
+  downloaded keyring is verified to contain the expected `DEB.SURY.ORG`
+  fingerprint before it is trusted; the build fails loudly on a mismatch
+  (rotation/tampering), instead of trusting whatever key the endpoint serves.
+- IPv6 lockdown now fails loudly. Previously, if `ip6tables` was unavailable the
+  firewall silently skipped v6 — leaving an unfiltered egress path on any
+  container with IPv6 connectivity. `init-firewall.sh` now `die`s when
+  `ip6tables` is missing *and* an IPv6 default route exists.
+
+### Documentation
+- Documented the firewall's limitations explicitly: allow-listed hosts (notably
+  GitHub, with the agent's token) remain a viable exfiltration channel, so the
+  firewall guards against accidental egress rather than a determined
+  exfiltrator. Added a "What the firewall does NOT protect against" section to
+  `SECURITY.md` and a caveat to the README.
+
+### Changed
+- The `ddev claude` firewall re-assert is now near-instant. `init-firewall.sh`
+  gained an `--ensure` mode that fast-paths to a no-op when the firewall is
+  already healthy, skipping the full reset, per-domain DNS resolution, and curl
+  smoke tests that previously ran on every `ddev claude` / `shell` / `exec`
+  invocation. A full rebuild still runs at container start and whenever the
+  health check fails, so transient start-time failures still self-heal.
+- The ddev sibling-service list for dnsmasq static records is no longer
+  hardcoded to `web db mailpit`. It is single-sourced, self-pruning (only names
+  that resolve get a record), and overridable for non-standard stacks via the
+  `DDEV_CLAUDE_SIBLING_HOSTS` environment variable (space-separated). This is a
+  DNS convenience only and cannot widen egress — the docker subnet is already
+  allowed via the `allowed-net` ipset.
+
+### Internal
+- Refactored the shell scripts to remove duplication: a shared `read_list_file`
+  helper (comment-strip + trim + skip-blank) in `build-image.sh` and
+  `init-firewall.sh`, a `_sha` sha256/shasum fallback helper, and a single
+  `discover_extras` source of available extras reused by both `validate_extras`
+  and the `.requires` dependency resolver (replacing an inline `ls | sed`). No
+  behavior change; covered by the existing `tests/build-image.bats` suite.
+
+## [v0.3.0-beta.2] — 2026-06-12
+
+### Added
+- `downloads.claude.ai` in the default firewall allow-list, so `claude update`
+  works out of the box.
+- `SECURITY.md` documenting the threat model and private vulnerability reporting.
+- `CONTRIBUTING.md` with the development workflow and the extras-catalog contribution guide.
+- Issue and pull-request templates under `.github/`.
+
+### Security
+- The outbound allow-list can no longer be widened from inside the sandbox.
+  Previously `init-firewall.sh` read `extra-domains.list` from the rw
+  bind-mounted project tree and honored `EXTRA_ALLOWED_DOMAINS` from its own
+  environment, so the unprivileged agent could append a domain (or `export` the
+  var) and re-run the firewall via the NOPASSWD `sudo` entry to reach arbitrary
+  hosts. The allow-list is now read only from root-owned files outside the bind
+  mount (`/etc/claude-firewall/{extra-domains,runtime-domains}.list`), the
+  script ignores its own environment, and the `env_keep` sudoers entry was
+  removed.
+- The firewall is now activated at container start by `entrypoint.sh` (PID 1,
+  running as root), so `ddev exec -s claude` and direct `docker exec` are
+  sandboxed too — not just the `ddev claude` host command.
+
+### Fixed
+- `EXTRA_ALLOWED_DOMAINS` now takes effect again: it is consumed once, at
+  container start, by `entrypoint.sh` (genuine root, trusted compose env) and
+  persisted to a root-owned runtime allow-list. Set it before `ddev start` /
+  `ddev restart`.
+- Re-running `init-firewall.sh` (which happens on every `ddev claude`) silently
+  lost the resolved IP baseline: the old rules were flushed while the DROP
+  policies persisted, so the initial DNS resolution phase ran with zero egress
+  and allow-listed domains stayed unreachable until dnsmasq happened to
+  re-resolve them. The iptables rules are now installed before dnsmasq setup
+  and the initial resolution, making the script genuinely idempotent.
+
+### Changed
+- Changing `extra_allowed_domains` in `.ddev/claude.yaml` now requires
+  `ddev claude rebuild` + `ddev restart` (the list is baked into the image),
+  consistent with how `extras` already work.
+
 ## [v0.3.0-beta.1] — 2026-06-03
 
 Pre-release. Pre-built image architecture — the default sidecar now pulls a published
@@ -61,6 +144,7 @@ Minimum-viable redesign (stable; promoted from `v0.2.0-beta.1`).
 
 Initial release.
 
+[v0.3.0-beta.2]: https://github.com/makraz/ddev-claude/releases/tag/v0.3.0-beta.2
 [v0.3.0-beta.1]: https://github.com/makraz/ddev-claude/releases/tag/v0.3.0-beta.1
 [v0.2.0]: https://github.com/makraz/ddev-claude/releases/tag/v0.2.0
 [v0.1.0]: https://github.com/makraz/ddev-claude/releases/tag/v0.1.0

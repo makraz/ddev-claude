@@ -3,14 +3,19 @@
 # ddev-claude — sidecar service definition.
 #
 # Adds a `claude` container alongside the standard ddev `web` service.
-# The container starts with `sleep infinity`; the actual Claude Code
-# session is launched on demand by `ddev claude`.
+# The container's PID 1 (entrypoint.sh, run as root) activates the outbound
+# firewall at start, then idles with `sleep infinity`. The actual Claude Code
+# session is launched on demand, as uid 1000, by `ddev claude`.
 # ---------------------------------------------------------------------------
 services:
     claude:
         build:
             context: ./claude
         container_name: ddev-${DDEV_SITENAME}-claude
+        # Run PID 1 as root so entrypoint.sh can configure iptables/ipset at
+        # start. Interactive Claude sessions are still uid 1000 — the `ddev
+        # claude` host command always execs with `--user claude`.
+        user: root
         working_dir: /var/www/html
         volumes:
             - ../:/var/www/html
@@ -36,4 +41,4 @@ services:
             - web
         networks:
             - default
-        entrypoint: sleep infinity
+        entrypoint: /usr/local/bin/entrypoint.sh

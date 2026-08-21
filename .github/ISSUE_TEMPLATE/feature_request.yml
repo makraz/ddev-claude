@@ -1,0 +1,43 @@
+name: Feature or extra request
+description: Propose a new feature, subcommand, or extra for the catalog.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For new tooling in the sidecar, the **extras catalog** is usually the right path —
+        see [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md#adding-an-extra-the-easy-encouraged-path).
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of request is this?
+      options:
+        - New extra (tool in the sidecar — e.g. node, python, gh)
+        - New `ddev claude` subcommand / behaviour
+        - Firewall / image / build-pipeline change
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the use case, not just the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach
+      description: How would it work? For an extra, list the tool and the outbound domains it needs at runtime.
+    validations:
+      required: false
+  - type: textarea
+    id: escape-hatch
+    attributes:
+      label: Why can't the Dockerfile escape hatch cover this?
+      description: |
+        `.ddev/claude.local/` lets you add tools and domains yourself. Explain why this
+        belongs in the add-on instead of (or in addition to) the escape hatch.
+    validations:
+      required: false

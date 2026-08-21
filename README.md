@@ -49,7 +49,7 @@ Set on your host shell before `ddev start` / `ddev restart`. The sidecar's `dock
 | --- | --- | --- |
 | `ANTHROPIC_API_KEY` | _unset_ | API key. Optional — OAuth flow runs on first launch if unset. |
 | `GITHUB_PERSONAL_ACCESS_TOKEN` | _unset_ | Forwarded to the sidecar so the agent can `git push` to private repos. Also exported as `GH_TOKEN` for `gh` and GitHub MCP fragments added via the escape hatch. |
-| `EXTRA_ALLOWED_DOMAINS` | _unset_ | Space-separated extra outbound domains, allow-listed at runtime. Prefer `.ddev/claude.yaml`'s `extra_allowed_domains:` for project-level settings. |
+| `EXTRA_ALLOWED_DOMAINS` | _unset_ | Space-separated extra outbound domains. Consumed once, at container start, so set it **before** `ddev start` / `ddev restart` (it is persisted to a root-owned allow-list inside the container; the running agent cannot change it). Prefer `.ddev/claude.yaml`'s `extra_allowed_domains:` for project-level settings. |
 | `PLAYWRIGHT_BASE_URL` | `https://web` | Pre-set inside the container so Playwright/MCP fragments added via the escape hatch hit the DDEV `web` service by default. Override on the host shell if needed. |
 | `CLAUDE_SAFE` | `0` | Read by the `ddev claude` host command. Set to `1` to opt out of YOLO mode for a single invocation (equivalent to `ddev claude safe`). |
 
@@ -153,7 +153,7 @@ A `claude` sidecar built from a pre-built multi-arch base image (`ghcr.io/makraz
 An outbound firewall (default-DROP policy) that allows only:
 
 - `github.com`, `api.github.com`
-- `anthropic.com`, `claude.ai`
+- `anthropic.com`, `claude.ai`, `downloads.claude.ai` (the latter so `claude update` works)
 - The DDEV internal network (so the agent can reach `web`, `db`, sibling add-ons).
 - Whatever each enabled extra contributes (`.domains` files) and your `.ddev/claude.yaml` adds via `extra_allowed_domains`.
 
@@ -173,14 +173,20 @@ If `example.com` is reachable or the iptables policy is `ACCEPT`, the firewall i
 
 ## How the firewall works
 
-`init-firewall.sh` (run as root via the NOPASSWD sudoers entry) sets up:
+The firewall is activated **at container start** by `entrypoint.sh` (PID 1, running as root), so every way into the container — `ddev claude`, `ddev claude shell`, `ddev exec -s claude`, and direct `docker exec` — is sandboxed, not just the `ddev claude` host command. `ddev claude` re-asserts it (idempotently) as a safety net.
+
+`init-firewall.sh` sets up:
 
 1. **ipsets** — `allowed-ipv4` (hash:ip) and `allowed-net` (hash:net).
 2. **Initial DNS resolution** — `dig` resolves the default + extra domains, populating `allowed-ipv4`.
 3. **dnsmasq** — listens on `127.0.0.1`, upstreams to `127.0.0.11` (Docker's embedded DNS, so DDEV service names like `web`/`db` resolve), `1.1.1.1`, `8.8.8.8`. Each allow-listed domain is bound via `ipset=/<domain>/allowed-ipv4`, so future resolutions automatically extend the allow-list — handles CDN IP rotation.
 4. **iptables** — default policy DROP on INPUT/OUTPUT/FORWARD. ACCEPT only loopback, established/related, DNS (port 53), the two ipsets, the host gateway, and inbound 80/443.
-5. **IPv6** — dropped entirely.
+5. **IPv6** — dropped entirely via `ip6tables`. If `ip6tables` is unavailable but the container has an IPv6 default route, `init-firewall.sh` **fails loudly** rather than leave v6 egress unfiltered.
 6. **Smoke tests** — reachability checks for github (must succeed) and `example.com` (must fail).
+
+The outbound allow-list is read **only from root-owned files** (`/etc/claude-firewall/extra-domains.list`, baked into the image from `.ddev/claude.yaml` at build; and `/etc/claude-firewall/runtime-domains.list`, written from `EXTRA_ALLOWED_DOMAINS` at start). Both live outside the bind-mounted project tree, and the script ignores its own environment, so the unprivileged agent cannot widen its egress by editing a file or re-running the firewall via `sudo`. Changing the `.ddev/claude.yaml` domains therefore requires `ddev claude rebuild` + `ddev restart`.
+
+> **The firewall bounds _where_ traffic goes, not _what_ leaves through allowed hosts.** The default allow-list includes GitHub, and the sidecar holds the agent's `GH_TOKEN`/`GITHUB_PERSONAL_ACCESS_TOKEN` — so a determined or compromised agent can still exfiltrate over an allowed channel (e.g. push a repo or gist). Treat it as a guard against *accidental* egress, not a barrier against a determined exfiltrator; keep the allow-list and your token scopes narrow. See [SECURITY.md](SECURITY.md#what-the-firewall-does-not-protect-against) for the full limitations.
 
 ## Developing the addon
 
