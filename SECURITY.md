@@ -55,7 +55,8 @@ destinations you allow. Read this before trusting the sandbox with secrets:
   (Fastly/Cloudflare/etc.), other tenants on the same edge IP become reachable
   too. This is inherent to IP-level filtering.
 - **Anything the agent can already read, it can act on.** The agent has full
-  read/write to the bind-mounted project tree and the tokens in its environment.
+  read/write to the project tree (the Mutagen volume, or a bind mount when
+  `mount_mode: bind`) and the tokens in its environment.
   The sandbox is a network boundary, not a data-classification or DLP layer.
 
 Within those limits, a bug that lets traffic reach a host that is **not**
