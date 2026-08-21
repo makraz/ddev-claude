@@ -29,12 +29,31 @@ included here. No separate v0.3.0 stable is needed.
 
 ---
 
-## v0.4.1 — close the test blind spot
+## v0.4.1 — artifact integrity and the test blind spot
+
+Two things belong here, and the first outranks everything else in this document.
+
+### Pin and verify what goes into the image
+
+`image/Dockerfile` installs the agent with an unpinned, unverified `curl | bash`. Consequences:
+the same tag rebuilds to a different artifact, a past release cannot be reconstructed, and an
+unverified remote payload is baked into an image that runs with `NET_ADMIN`. The `php` extra
+already pins and fingerprint-checks the Sury key — the agent binary deserves the same treatment.
+
+- `ARG CLAUDE_VERSION` with an explicit default; verify a checksum; fail the build on mismatch.
+- `provenance: mode=max` and `sbom: true` on the build-push step.
+- Sign release tags.
+- Protect `main`: require the `tests` check, disallow force-push, require a PR.
+
+None of that is large. All of it is load-bearing for a package whose value proposition is
+containment.
+
+### Close the test blind spot
 
 The uid lockout was found by hand, on a real project, after eleven task reviews and a full green
 suite. CI could not have caught it: it runs Linux-only, where `performance_mode` resolves to
-`bind`, and a bind mount masks uid mismatches entirely. That blind spot is the highest-value fix
-available.
+`bind`, and a bind mount masks uid mismatches entirely.
+
 
 - **macOS runner in CI**, exercising the Mutagen path. This is the one that matters.
 - **DDEV version matrix** — the oldest version the constraint claims (`v1.24.0`) plus latest.
@@ -81,6 +100,11 @@ Only after the pipeline is trustworthy.
 - **`chore/maintainer-tooling` can be deleted** once v0.4.0 merges — its content is in `main`, and
   its two unpushed cherry-picks arrive via the v0.4.0 branch.
 - **Two integration tests reach the public internet.** Flaky by construction.
+- **No upgrade guidance for breaking releases.** v0.4.0 changes defaults, moves state and changes
+  the container's user identity. The changelog says what changed; nothing tells an existing user
+  what to *do* about it. A short "upgrading from v0.2.x" section would carry more weight than any
+  feature in v0.5.0.
+- **No deprecation policy.** Required before 1.0 can mean anything.
 
 ---
 

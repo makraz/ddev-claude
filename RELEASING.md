@@ -118,6 +118,57 @@ version.
 
 ---
 
+## Artifact integrity — the weakest part of this pipeline
+
+The release *mechanics* here are reasonable. The guarantees about *what you shipped* are not, and
+for an add-on whose entire purpose is sandboxing, that inversion matters more than it would
+elsewhere. Four specifics, all currently true:
+
+**1. The published image is not reproducible.** `image/Dockerfile:43` is:
+
+```dockerfile
+RUN curl -fsSL https://claude.ai/install.sh | bash
+```
+
+No version pin. The Claude Code version inside the image is whatever that endpoint served at the
+moment the workflow ran. Two builds of the *same tag* are different artifacts, and there is no way
+to reconstruct what a past release contained. The Dockerfile comment says the version is "captured
+in an OCI label so `docker inspect` shows what's baked in" — a label records the outcome, it does
+not make it reproducible or verifiable.
+
+**2. That install is unverified.** A `curl | bash` from a remote host, with no checksum and no
+signature, executed at image build time. The result is baked into an image that later runs with
+`NET_ADMIN` and `NET_RAW`. The `php` extra pins and fingerprint-verifies the Sury signing key
+precisely because trusting an unverified remote was judged unacceptable there — the same standard
+is not applied to the agent binary itself.
+
+**3. Nothing is attested.** `publish-image.yml` has zero occurrences of provenance, attestation,
+SBOM or signing. Users pulling `ghcr.io/makraz/ddev-claude-base:<tag>` cannot verify it was built
+from this repo at that tag. `docker/build-push-action` supports `provenance:` and
+`sbom:` inputs; GitHub provides `actions/attest-build-provenance`. None are used.
+
+**4. Tags are unsigned.** `git verify-tag v0.3.0-beta.3` → *no signature found*. For a project
+distributing a security tool, a signed tag is the cheapest possible assertion that a release came
+from you.
+
+### Minimum bar to fix this
+
+- Pin the CLI: `ARG CLAUDE_VERSION` with an explicit default, verify a checksum, and fail the
+  build on mismatch — the treatment the Sury key already gets.
+- Add `provenance: mode=max` and `sbom: true` to the build-push step.
+- Sign tags (`git tag -s`), or at minimum enable GitHub's tag protection.
+- Record the resolved CLI version in the release notes, not only in an OCI label.
+
+## Repository governance
+
+`main` is **not protected** (`GET /branches/main/protection` → 404). It was force-pushed during
+this release with nothing to stop it. For a public repo that distributes an executable sandbox,
+the baseline is: require the `tests` check to pass, disallow force-push, and require a PR to
+merge. That is also the mechanism that would have prevented `main` from silently falling 12
+commits behind its own releases.
+
+---
+
 ## Known gaps in the current pipeline
 
 Recorded so they are chosen rather than forgotten:
@@ -129,3 +180,7 @@ Recorded so they are chosen rather than forgotten:
 | Two integration tests depend on the public internet | `downloads.claude.ai` and `packages.sury.org` reachability. They flake under load and will flake in CI. |
 | Release notes written by hand | Fine at this cadence, drifts at higher cadence. |
 | No arm64 test | The image is multi-arch; only amd64 is tested. |
+| CLI version unpinned in the image | Same tag rebuilds to a different artifact; no way to reconstruct a past release. |
+| No provenance / SBOM / signature | Users cannot verify the image came from this repo at that tag. |
+| Tags unsigned | No cryptographic assertion that a release is yours. |
+| `main` unprotected | Force-pushable; nothing enforces that CI passed before a merge. |
