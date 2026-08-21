@@ -70,7 +70,10 @@ in_sidecar() {
   docker exec "ddev-${PROJNAME}-claude" sudo /usr/local/bin/init-firewall.sh >/dev/null 2>&1
 
   # 1. iptables OUTPUT policy is DROP
-  run docker exec "ddev-${PROJNAME}-claude" sudo iptables -L OUTPUT -n
+  # Inspect as root: the default container user is `claude`, whose sudoers entry
+  # only permits init-firewall.sh — not arbitrary iptables — so `sudo iptables`
+  # as claude would fail the non-interactive password prompt.
+  run docker exec --user root "ddev-${PROJNAME}-claude" iptables -L OUTPUT -n
   [ "$status" -eq 0 ]
   [[ "${lines[0]}" =~ "policy DROP" ]]
 
@@ -136,7 +139,10 @@ YAML
   # Deliberately do NOT run init-firewall.sh by hand — entrypoint.sh should
   # have activated it at container start.
 
-  run docker exec "ddev-${PROJNAME}-claude" sudo iptables -L OUTPUT -n
+  # Inspect as root: the default container user is `claude`, whose sudoers entry
+  # only permits init-firewall.sh — not arbitrary iptables — so `sudo iptables`
+  # as claude would fail the non-interactive password prompt.
+  run docker exec --user root "ddev-${PROJNAME}-claude" iptables -L OUTPUT -n
   [ "$status" -eq 0 ]
   [[ "${lines[0]}" =~ "policy DROP" ]]
 
@@ -156,7 +162,10 @@ YAML
   run docker exec "ddev-${PROJNAME}-claude" sudo /usr/local/bin/init-firewall.sh --ensure
   [ "$status" -eq 0 ]
   [[ "$output" =~ "skipping re-init" ]]
-  run docker exec "ddev-${PROJNAME}-claude" sudo iptables -L OUTPUT -n
+  # Inspect as root: the default container user is `claude`, whose sudoers entry
+  # only permits init-firewall.sh — not arbitrary iptables — so `sudo iptables`
+  # as claude would fail the non-interactive password prompt.
+  run docker exec --user root "ddev-${PROJNAME}-claude" iptables -L OUTPUT -n
   [[ "${lines[0]}" =~ "policy DROP" ]]
 
   # If the marker is gone (transient start-time failure), --ensure does a full

@@ -21,6 +21,13 @@ teardown() {
   rm -rf "$PROJ"
 }
 
+# Portable mtime-in-epoch-seconds. GNU stat first (Linux/CI): `stat -f` there means
+# --file-system and would dump a verbose, run-varying block instead of the mtime, so
+# BSD `stat -f %m` must only be the fallback (macOS).
+mtime() {
+  stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"
+}
+
 @test "parser: empty config (no .ddev/claude.yaml) → no extras selected" {
   run "$PROJ/.ddev/claude/build-image.sh"
   [ "$status" -eq 0 ]
@@ -174,11 +181,11 @@ extras:
 YAML
   run "$PROJ/.ddev/claude/build-image.sh"
   [ "$status" -eq 0 ]
-  mtime1="$(stat -f %m "$PROJ/.ddev/claude/Dockerfile" 2>/dev/null || stat -c %Y "$PROJ/.ddev/claude/Dockerfile")"
+  mtime1="$(mtime "$PROJ/.ddev/claude/Dockerfile")"
   sleep 1
   run "$PROJ/.ddev/claude/build-image.sh"
   [ "$status" -eq 0 ]
-  mtime2="$(stat -f %m "$PROJ/.ddev/claude/Dockerfile" 2>/dev/null || stat -c %Y "$PROJ/.ddev/claude/Dockerfile")"
+  mtime2="$(mtime "$PROJ/.ddev/claude/Dockerfile")"
   [ "$mtime1" = "$mtime2" ]
 }
 
@@ -189,7 +196,7 @@ extras:
 YAML
   run "$PROJ/.ddev/claude/build-image.sh"
   [ "$status" -eq 0 ]
-  mtime1="$(stat -f %m "$PROJ/.ddev/claude/Dockerfile" 2>/dev/null || stat -c %Y "$PROJ/.ddev/claude/Dockerfile")"
+  mtime1="$(mtime "$PROJ/.ddev/claude/Dockerfile")"
   sleep 1
   # remove php from extras
   cat > "$PROJ/.ddev/claude.yaml" <<'YAML'
@@ -197,6 +204,6 @@ extras: []
 YAML
   run "$PROJ/.ddev/claude/build-image.sh"
   [ "$status" -eq 0 ]
-  mtime2="$(stat -f %m "$PROJ/.ddev/claude/Dockerfile" 2>/dev/null || stat -c %Y "$PROJ/.ddev/claude/Dockerfile")"
+  mtime2="$(mtime "$PROJ/.ddev/claude/Dockerfile")"
   [ "$mtime2" -gt "$mtime1" ]
 }
