@@ -33,20 +33,20 @@ included here. No separate v0.3.0 stable is needed.
 
 Two things belong here, and the first outranks everything else in this document.
 
-### Pin and verify what goes into the image
+### Artifact integrity — mostly done
 
-`image/Dockerfile` installs the agent with an unpinned, unverified `curl | bash`. Consequences:
-the same tag rebuilds to a different artifact, a past release cannot be reconstructed, and an
-unverified remote payload is baked into an image that runs with `NET_ADMIN`. The `php` extra
-already pins and fingerprint-checks the Sury key — the agent binary deserves the same treatment.
+Landed: the agent version is pinned via `ARG CLAUDE_VERSION` and the build fails if the installed
+version does not match; one resolved version feeds both architectures (previously each arch ran
+the installer independently, so a mid-build upstream release could put two versions under one
+manifest while the OCI label described neither); and the build emits `provenance: mode=max` plus
+an SBOM.
 
-- `ARG CLAUDE_VERSION` with an explicit default; verify a checksum; fail the build on mismatch.
-- `provenance: mode=max` and `sbom: true` on the build-push step.
-- Sign release tags.
-- Protect `main`: require the `tests` check, disallow force-push, require a PR.
+Remaining:
 
-None of that is large. All of it is load-bearing for a package whose value proposition is
-containment.
+- **Sign release tags** — needs a signing key on the maintainer's machine.
+- **Protect `main`**: require the `tests` check, disallow force-push, require a PR. It is currently
+  unprotected and was force-pushed during this release with nothing to stop it.
+- Put the resolved agent version in the release notes, not only in an OCI label.
 
 ### Close the test blind spot
 

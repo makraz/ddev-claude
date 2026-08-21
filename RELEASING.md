@@ -124,7 +124,7 @@ The release *mechanics* here are reasonable. The guarantees about *what you ship
 for an add-on whose entire purpose is sandboxing, that inversion matters more than it would
 elsewhere. Four specifics, all currently true:
 
-**1. The published image is not reproducible.** `image/Dockerfile:43` is:
+**1. The published image was not reproducible.** *(Fixed — see below.)* `image/Dockerfile` was:
 
 ```dockerfile
 RUN curl -fsSL https://claude.ai/install.sh | bash
@@ -136,11 +136,12 @@ to reconstruct what a past release contained. The Dockerfile comment says the ve
 in an OCI label so `docker inspect` shows what's baked in" — a label records the outcome, it does
 not make it reproducible or verifiable.
 
-**2. That install is unverified.** A `curl | bash` from a remote host, with no checksum and no
-signature, executed at image build time. The result is baked into an image that later runs with
-`NET_ADMIN` and `NET_RAW`. The `php` extra pins and fingerprint-verifies the Sury signing key
-precisely because trusting an unverified remote was judged unacceptable there — the same standard
-is not applied to the agent binary itself.
+**2. The installer script itself is unverified, though the binary is not.** Correcting an earlier
+overstatement here: `install.sh` fetches a `manifest.json` and verifies the downloaded binary
+against a SHA256 checksum from it, so the *payload* is integrity-checked upstream. What is
+unverified is the installer script — `curl | bash` from a remote host, executed at build time,
+with the result baked into an image that later runs with `NET_ADMIN` and `NET_RAW`. That is a
+narrower gap than "no checksum anywhere", and worth stating accurately.
 
 **3. Nothing is attested.** `publish-image.yml` has zero occurrences of provenance, attestation,
 SBOM or signing. Users pulling `ghcr.io/makraz/ddev-claude-base:<tag>` cannot verify it was built
@@ -151,13 +152,29 @@ from this repo at that tag. `docker/build-push-action` supports `provenance:` an
 distributing a security tool, a signed tag is the cheapest possible assertion that a release came
 from you.
 
-### Minimum bar to fix this
+### What was fixed
 
-- Pin the CLI: `ARG CLAUDE_VERSION` with an explicit default, verify a checksum, and fail the
-  build on mismatch — the treatment the Sury key already gets.
-- Add `provenance: mode=max` and `sbom: true` to the build-push step.
-- Sign tags (`git tag -s`), or at minimum enable GitHub's tag protection.
-- Record the resolved CLI version in the release notes, not only in an OCI label.
+- **The agent version is pinned and verified.** `image/Dockerfile` takes `ARG CLAUDE_VERSION`,
+  passes it to the installer, and **fails the build** if the installed version does not match what
+  was asked for. Verified both ways: an explicit pin produces exactly that version, and a bogus
+  version fails the build.
+- **A single resolved version feeds both architectures.** `publish-image.yml` resolved the version
+  in a throwaway container and wrote it to an OCI label, while the real build ran the installer
+  again — independently, once per architecture. The label could therefore disagree with the
+  contents, and amd64 and arm64 could carry different versions under one manifest. The resolved
+  value is now passed as a build arg, so label and contents agree by construction.
+- **The resolver now extracts a semver.** It captured `claude --version` whole — `2.1.235 (Claude
+  Code)` — which is not a valid version argument, so it could never have been used as a pin.
+  It now takes the first field and fails if that is not a semver.
+- **Provenance and SBOM are emitted.** `provenance: mode=max` and `sbom: true`, so a user pulling
+  the image can verify it came from this repo at this tag and see what is inside.
+
+### Still open
+
+- **Tags are unsigned.** Needs a signing key on the maintainer's machine — `git tag -s`, or GitHub
+  tag protection as a weaker substitute.
+- **`main` is unprotected** (see below).
+- **Record the resolved version in the release notes**, not only in the OCI label.
 
 ## Repository governance
 
