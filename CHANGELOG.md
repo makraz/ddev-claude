@@ -6,6 +6,8 @@ All notable changes to this add-on are documented here. This project adheres to
 
 ## [Unreleased]
 
+## [v0.4.1] — 2026-08-31
+
 ### Fixed
 - Blocked egress now fails immediately instead of hanging. `-P OUTPUT DROP`
   black-holed the packet, so a connection to a non-allow-listed host waited out
