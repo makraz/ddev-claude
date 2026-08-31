@@ -260,6 +260,25 @@ iptables -A INPUT -p udp --dport 443 -j ACCEPT
 iptables -A OUTPUT -p icmp --icmp-type echo-request -j ACCEPT
 iptables -A INPUT  -p icmp --icmp-type echo-reply   -j ACCEPT
 
+# Terminal REJECT on OUTPUT: make a blocked connection fail, not hang.
+#
+# `-P OUTPUT DROP` on its own black-holes blocked egress — the packet is
+# swallowed with no RST and no ICMP, so the client waits out its full connect
+# timeout. DNS still resolves (port 53 is open to the upstreams above), so a
+# client happily commits to a connection that will never be answered. The cost
+# is per attempt and paid by whatever the agent runs: curl defaults to a 300s
+# connect timeout, and a package manager or test suite that touches a
+# non-allow-listed host multiplies that by every request it makes.
+#
+# These two rules sit last in OUTPUT, so anything an earlier ACCEPT matched is
+# unaffected. This does NOT widen egress by a single address — the allow-list
+# above is untouched. It only changes *how* a blocked connection fails:
+# immediately, with ECONNREFUSED, instead of hanging. The DROP policy stays as
+# the backstop in case these rules are ever flushed without the policy being
+# reset.
+iptables -A OUTPUT -p tcp -j REJECT --reject-with tcp-reset
+iptables -A OUTPUT -j REJECT --reject-with icmp-port-unreachable
+
 # IPv6 -> drop entirely.
 #
 # If ip6tables is unavailable we cannot filter v6. That's only safe when the
@@ -275,6 +294,11 @@ if command -v ip6tables >/dev/null; then
   ip6tables -A OUTPUT -o lo -j ACCEPT || true
   ip6tables -A INPUT  -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
   ip6tables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
+  # Same fast-fail reasoning as the IPv4 REJECT above. External names still
+  # return AAAA records, so a client that prefers IPv6 would otherwise hang on
+  # the v6 attempt before falling back to v4.
+  ip6tables -A OUTPUT -p tcp -j REJECT --reject-with tcp-reset || true
+  ip6tables -A OUTPUT -j REJECT --reject-with icmp6-port-unreachable || true
 elif ip -6 route show default 2>/dev/null | grep -q .; then
   die "ip6tables not installed but an IPv6 default route exists — cannot filter IPv6 egress. Rebuild the base image with ip6tables, or disable IPv6 on the container."
 else
