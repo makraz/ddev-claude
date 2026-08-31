@@ -6,6 +6,15 @@ All notable changes to this add-on are documented here. This project adheres to
 
 ## [Unreleased]
 
+### Fixed
+- Blocked egress now fails immediately instead of hanging. `-P OUTPUT DROP`
+  black-holed the packet, so a connection to a non-allow-listed host waited out
+  the client's full connect timeout (300s for curl's default) rather than
+  erroring. A terminal `REJECT` is now appended last to the `OUTPUT` chain in
+  both the IPv4 and IPv6 lockdown, returning `ECONNREFUSED` at once. The
+  allow-list is unchanged — this alters only *how* a blocked connection fails —
+  and the `DROP` policy remains as the backstop.
+
 ## [v0.4.0] — 2026-08-21
 
 ### Changed — BREAKING

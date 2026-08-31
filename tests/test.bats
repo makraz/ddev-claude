@@ -107,6 +107,13 @@ wait_for_firewall() {
   # curl exit non-zero OR http_code is 000 — either is a block.
   [ "$status" -ne 0 ] || [ "$output" = "000" ]
 
+  # 2b. the block fails fast (terminal REJECT), rather than by timing out
+  # (which is what a bare DROP policy does). curl exit 7 = connection refused,
+  # 28 = operation timed out. The generous --max-time keeps this a behaviour
+  # assertion on the exit code, not a stopwatch.
+  run docker exec --user claude "ddev-${PROJNAME}-claude" curl --max-time 20 -s -o /dev/null https://example.com
+  [ "$status" -eq 7 ]
+
   # 3. api.github.com is reachable
   run docker exec --user claude "ddev-${PROJNAME}-claude" curl --max-time 5 -s -o /dev/null -w '%{http_code}' https://api.github.com
   [ "$status" -eq 0 ]
