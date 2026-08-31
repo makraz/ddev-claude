@@ -7,7 +7,7 @@
 # build-image.sh works against; it inlines selected extras at the marker
 # below.
 # ---------------------------------------------------------------------------
-FROM ghcr.io/makraz/ddev-claude-base:v0.4.0
+FROM ghcr.io/makraz/ddev-claude-base:v0.4.1
 
 USER root
 COPY init-firewall.sh /usr/local/bin/init-firewall.sh
