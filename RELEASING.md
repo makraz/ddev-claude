@@ -149,7 +149,8 @@ provenance, attestation, SBOM or signing. Users pulling `ghcr.io/makraz/ddev-cla
 from this repo at that tag. `docker/build-push-action` supports `provenance:` and
 `sbom:` inputs; GitHub provides `actions/attest-build-provenance`. None are used.
 
-**4. Tags are unsigned.** *(Still open.)* `git verify-tag v0.4.1` → *no signature found*. For a project
+**4. Tags are unsigned.** *(Fixed for future tags — see below.)* `git verify-tag v0.4.1` → *no
+signature found*, and the same holds for every tag before it. For a project
 distributing a security tool, a signed tag is the cheapest possible assertion that a release came
 from you.
 
@@ -170,18 +171,17 @@ from you.
 - **Provenance and SBOM are emitted.** `provenance: mode=max` and `sbom: true`, so a user pulling
   the image can verify it came from this repo at this tag and see what is inside.
 
-### Still open
-
-- **Tags are unsigned.** Every tag through `v0.4.1` is unsigned (`git verify-tag` → *no signature
-  found*). Needs a signing key on the maintainer's machine. Signing starts at the next tag —
-  a released tag is never re-pushed, so the existing ones stay unsigned.
-
-### Also fixed
-
+- **Tag signing is configured**, and takes effect from the next tag. SSH signing, with
+  `tag.gpgsign` on globally, so a release tag signs without anyone remembering `-s`. Verified end
+  to end on a throwaway tag: `git verify-tag` reports a good signature locally, and the GitHub API
+  reports `verified=true`, `reason=valid` for the pushed tag. **The tags through `v0.4.1` stay
+  unsigned** — a released tag is never re-pushed, so they cannot be signed retroactively.
 - **The resolved agent version is now in the release notes.** `v0.4.1` records the baked Claude
   Code version, the image digest's source revision, and the arches in an *Artifact* section,
   rather than leaving it only in the OCI label.
 - **`main` is protected** — see below.
+
+Nothing on the original list of four is left open.
 
 ## Repository governance
 
@@ -212,14 +212,37 @@ tag signing has been in use for a release or two.
 
 ### Signing a tag
 
-Once a signing key is configured (`gpg.format`, `user.signingkey`, `tag.gpgsign` — SSH signing is
-the cheapest route, and needs the public key registered on GitHub as a **signing** key, which is
-separate from the same key registered for auth), step 5 becomes:
+Configured, and on by default. The maintainer's setup, for the record and for rebuilding it on a
+new machine:
+
+| Setting | Value |
+| --- | --- |
+| `gpg.format` | `ssh` |
+| `user.signingkey` | `~/.ssh/id_rsa.pub` |
+| `tag.gpgsign` | `true` — tags sign without `-s` |
+| `commit.gpgsign` | unset — tags only |
+| `gpg.ssh.allowedSignersFile` | `~/.config/git/allowed_signers` |
+
+Two separate things have to be true, and only the first is local. The key must be registered on
+GitHub as a **signing** key — a distinct entry from the same key registered for auth — or the tag
+still pushes and simply shows no Verified badge. And `allowed_signers` (one `<email> <keytype>
+<key>` line) is what makes *local* `git verify-tag` work; without it verification fails with
+`gpg.ssh.allowedSignersFile needs to be configured` even though the signature is perfectly good.
+
+Step 5 gains one line:
 
 ```bash
-git tag -s v0.4.2 -m "v0.4.2"
-git verify-tag v0.4.2        # must report a good signature before pushing
+git tag -a v0.4.2 -m "v0.4.2"   # signed automatically via tag.gpgsign
+git verify-tag v0.4.2           # must report a good signature before pushing
 git push origin v0.4.2
+```
+
+After pushing, confirm GitHub agrees — a locally valid signature and a Verified badge are
+different claims:
+
+```bash
+gh api repos/makraz/ddev-claude/git/ref/tags/v0.4.2 -q '.object.sha' \
+  | xargs -I{} gh api repos/makraz/ddev-claude/git/tags/{} -q '.verification'
 ```
 
 ---
@@ -235,4 +258,4 @@ Recorded so they are chosen rather than forgotten:
 | Two integration tests depend on the public internet | `downloads.claude.ai` and `packages.sury.org` reachability. They flake under load and will flake in CI. |
 | Release notes written by hand | Fine at this cadence, drifts at higher cadence. |
 | No arm64 test | The image is multi-arch; only amd64 is tested. |
-| Tags unsigned | No cryptographic assertion that a release is yours. The image itself carries provenance and an SBOM; the tag pointing at it carries nothing. |
+| Tags through `v0.4.1` unsigned | Signing starts at the next tag; the released ones cannot be signed retroactively, since a released tag is never re-pushed. |
