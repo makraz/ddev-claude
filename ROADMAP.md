@@ -49,10 +49,12 @@ an SBOM.
 
 Remaining:
 
-- **Sign release tags** — needs a signing key on the maintainer's machine.
-- **Protect `main`**: require the `tests` check, disallow force-push, require a PR. It is currently
-  unprotected and was force-pushed during this release with nothing to stop it.
-- Put the resolved agent version in the release notes, not only in an OCI label.
+- **Sign release tags** — the one item still open. Needs a signing key on the maintainer's
+  machine; the tags through `v0.4.1` stay unsigned, since a released tag is never re-pushed.
+
+Also landed: `main` is now protected (required `addon-test` check, no force-push, no deletion,
+`enforce_admins` on), and the `v0.4.1` release notes record the resolved agent version and the
+built revision rather than leaving them in the OCI label alone.
 
 ### Close the test blind spot
 

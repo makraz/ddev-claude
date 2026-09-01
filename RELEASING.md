@@ -122,7 +122,8 @@ version.
 
 The release *mechanics* here are reasonable. The guarantees about *what you shipped* are not, and
 for an add-on whose entire purpose is sandboxing, that inversion matters more than it would
-elsewhere. Four specifics, all currently true:
+elsewhere. Four specifics, three of which have since been fixed — each is marked, with the
+detail under *What was fixed*:
 
 **1. The published image was not reproducible.** *(Fixed — see below.)* `image/Dockerfile` was:
 
@@ -143,12 +144,12 @@ unverified is the installer script — `curl | bash` from a remote host, execute
 with the result baked into an image that later runs with `NET_ADMIN` and `NET_RAW`. That is a
 narrower gap than "no checksum anywhere", and worth stating accurately.
 
-**3. Nothing is attested.** `publish-image.yml` has zero occurrences of provenance, attestation,
-SBOM or signing. Users pulling `ghcr.io/makraz/ddev-claude-base:<tag>` cannot verify it was built
+**3. Nothing is attested.** *(Fixed — see below.)* `publish-image.yml` had zero occurrences of
+provenance, attestation, SBOM or signing. Users pulling `ghcr.io/makraz/ddev-claude-base:<tag>` cannot verify it was built
 from this repo at that tag. `docker/build-push-action` supports `provenance:` and
 `sbom:` inputs; GitHub provides `actions/attest-build-provenance`. None are used.
 
-**4. Tags are unsigned.** `git verify-tag v0.3.0-beta.3` → *no signature found*. For a project
+**4. Tags are unsigned.** *(Still open.)* `git verify-tag v0.4.1` → *no signature found*. For a project
 distributing a security tool, a signed tag is the cheapest possible assertion that a release came
 from you.
 
@@ -171,18 +172,55 @@ from you.
 
 ### Still open
 
-- **Tags are unsigned.** Needs a signing key on the maintainer's machine — `git tag -s`, or GitHub
-  tag protection as a weaker substitute.
-- **`main` is unprotected** (see below).
-- **Record the resolved version in the release notes**, not only in the OCI label.
+- **Tags are unsigned.** Every tag through `v0.4.1` is unsigned (`git verify-tag` → *no signature
+  found*). Needs a signing key on the maintainer's machine. Signing starts at the next tag —
+  a released tag is never re-pushed, so the existing ones stay unsigned.
+
+### Also fixed
+
+- **The resolved agent version is now in the release notes.** `v0.4.1` records the baked Claude
+  Code version, the image digest's source revision, and the arches in an *Artifact* section,
+  rather than leaving it only in the OCI label.
+- **`main` is protected** — see below.
 
 ## Repository governance
 
-`main` is **not protected** (`GET /branches/main/protection` → 404). It was force-pushed during
-this release with nothing to stop it. For a public repo that distributes an executable sandbox,
-the baseline is: require the `tests` check to pass, disallow force-push, and require a PR to
-merge. That is also the mechanism that would have prevented `main` from silently falling 12
-commits behind its own releases.
+`main` **is protected**, as of `v0.4.1`. It was not for the releases before that: `GET
+/branches/main/protection` returned 404, and `main` was force-pushed during the `v0.4.0` release
+with nothing to stop it.
+
+Current settings:
+
+| Setting | Value |
+| --- | --- |
+| Required status check | `addon-test` (not strict — a branch need not be up to date to merge) |
+| `enforce_admins` | true — the rules apply to the maintainer too |
+| `allow_force_pushes` | false |
+| `allow_deletions` | false |
+| `required_pull_request_reviews` | not set |
+| `required_signatures` | false |
+| `required_linear_history` | false |
+
+Classic branch protection; no rulesets. A direct push whose commit has no passing `addon-test` is
+rejected, which is what makes a PR the practical route to `main` — that is the mechanism that
+would have prevented `main` from silently falling 12 commits behind its own releases.
+
+Two settings are deliberately off. **Required reviews** would only mean a solo maintainer cannot
+merge their own PRs. **`required_signatures`** demands every *commit* on `main` be signed, not
+just tags, which would block unsigned merges from CI and the web UI — worth revisiting only once
+tag signing has been in use for a release or two.
+
+### Signing a tag
+
+Once a signing key is configured (`gpg.format`, `user.signingkey`, `tag.gpgsign` — SSH signing is
+the cheapest route, and needs the public key registered on GitHub as a **signing** key, which is
+separate from the same key registered for auth), step 5 becomes:
+
+```bash
+git tag -s v0.4.2 -m "v0.4.2"
+git verify-tag v0.4.2        # must report a good signature before pushing
+git push origin v0.4.2
+```
 
 ---
 
@@ -197,7 +235,4 @@ Recorded so they are chosen rather than forgotten:
 | Two integration tests depend on the public internet | `downloads.claude.ai` and `packages.sury.org` reachability. They flake under load and will flake in CI. |
 | Release notes written by hand | Fine at this cadence, drifts at higher cadence. |
 | No arm64 test | The image is multi-arch; only amd64 is tested. |
-| CLI version unpinned in the image | Same tag rebuilds to a different artifact; no way to reconstruct a past release. |
-| No provenance / SBOM / signature | Users cannot verify the image came from this repo at that tag. |
-| Tags unsigned | No cryptographic assertion that a release is yours. |
-| `main` unprotected | Force-pushable; nothing enforces that CI passed before a merge. |
+| Tags unsigned | No cryptographic assertion that a release is yours. The image itself carries provenance and an SBOM; the tag pointing at it carries nothing. |
