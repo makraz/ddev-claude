@@ -39,7 +39,7 @@ also fixes the actual delivery problem — `ddev add-on get` never serves a pre-
 
 Two things belong here, and the first outranks everything else in this document.
 
-### Artifact integrity — mostly done
+### Artifact integrity — done
 
 Landed: the agent version is pinned via `ARG CLAUDE_VERSION` and the build fails if the installed
 version does not match; one resolved version feeds both architectures (previously each arch ran
@@ -47,12 +47,14 @@ the installer independently, so a mid-build upstream release could put two versi
 manifest while the OCI label described neither); and the build emits `provenance: mode=max` plus
 an SBOM.
 
-Remaining:
+Also landed: **release tags are signed** from the next tag onward (SSH signing, `tag.gpgsign` on,
+verified end to end — good signature locally, `verified=true` from the GitHub API on a pushed
+tag); `main` is protected (required `addon-test` check, no force-push, no deletion,
+`enforce_admins` on); and the `v0.4.1` release notes record the resolved agent version and the
+built revision rather than leaving them in the OCI label alone.
 
-- **Sign release tags** — needs a signing key on the maintainer's machine.
-- **Protect `main`**: require the `tests` check, disallow force-push, require a PR. It is currently
-  unprotected and was force-pushed during this release with nothing to stop it.
-- Put the resolved agent version in the release notes, not only in an OCI label.
+Nothing remains here. The tags through `v0.4.1` stay unsigned — a released tag is never re-pushed,
+so they cannot be signed retroactively.
 
 ### Close the test blind spot
 
