@@ -6,6 +6,12 @@ All notable changes to this add-on are documented here. This project adheres to
 
 ## [Unreleased]
 
+## [v0.4.2] — 2026-09-26
+
+### Changed
+- Base image rebuilt with the current Claude Code release (see the release notes for the exact version).
+- Documentation: the release procedure now signs and verifies tags, and the still-open installer-script gap is listed under Known gaps.
+
 ## [v0.4.1] — 2026-08-31
 
 ### Fixed
