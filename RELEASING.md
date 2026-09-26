@@ -74,12 +74,23 @@ The image does not exist yet; `publish-image.yml` creates it on tag push. CI bui
 (`tests.yml` extracts the tag from `Dockerfile.base` and runs `docker build image/`) so pull
 requests work before the tag exists.
 
-**5. Tag annotated, from `main`.**
+**5. Tag annotated and signed, from `main`, and verify the signature before pushing.**
 
 ```bash
-git tag -a v0.4.0 -m "v0.4.0"
+git tag -a v0.4.0 -m "v0.4.0"   # signed automatically via tag.gpgsign
+git verify-tag v0.4.0           # must report a good signature before pushing
 git push origin v0.4.0
 ```
+
+After pushing, confirm GitHub agrees — a locally valid signature and a Verified badge are
+different claims:
+
+```bash
+gh api repos/makraz/ddev-claude/git/ref/tags/v0.4.0 -q '.object.sha' \
+  | xargs -I{} gh api repos/makraz/ddev-claude/git/tags/{} -q '.verification'
+```
+
+Setup for signing is under *Signing a tag*.
 
 **6. Wait for `publish-image.yml` to go green** before telling anyone. Between the tag push and
 the multi-arch build finishing (~3–5 min), `Dockerfile.base` points at an image that does not
@@ -144,10 +155,11 @@ unverified is the installer script — `curl | bash` from a remote host, execute
 with the result baked into an image that later runs with `NET_ADMIN` and `NET_RAW`. That is a
 narrower gap than "no checksum anywhere", and worth stating accurately.
 
-**3. Nothing is attested.** *(Fixed — see below.)* `publish-image.yml` had zero occurrences of
-provenance, attestation, SBOM or signing. Users pulling `ghcr.io/makraz/ddev-claude-base:<tag>` cannot verify it was built
-from this repo at that tag. `docker/build-push-action` supports `provenance:` and
-`sbom:` inputs; GitHub provides `actions/attest-build-provenance`. None are used.
+**3. Nothing was attested.** *(Fixed — see below.)* `publish-image.yml` had zero occurrences of
+provenance, attestation, SBOM or signing. Users pulling `ghcr.io/makraz/ddev-claude-base:<tag>`
+could not verify it was built from this repo at that tag. `docker/build-push-action` supports
+`provenance:` and `sbom:` inputs; GitHub provides `actions/attest-build-provenance`. None were
+used.
 
 **4. Tags are unsigned.** *(Fixed for future tags — see below.)* `git verify-tag v0.4.1` → *no
 signature found*, and the same holds for every tag before it. For a project
@@ -177,11 +189,12 @@ from you.
   reports `verified=true`, `reason=valid` for the pushed tag. **The tags through `v0.4.1` stay
   unsigned** — a released tag is never re-pushed, so they cannot be signed retroactively.
 - **The resolved agent version is now in the release notes.** `v0.4.1` records the baked Claude
-  Code version, the image digest's source revision, and the arches in an *Artifact* section,
-  rather than leaving it only in the OCI label.
+  Code version, the source revision the image was built from, and the arches in an *Artifact*
+  section, rather than leaving it only in the OCI label.
 - **`main` is protected** — see below.
 
-Nothing on the original list of four is left open.
+**Item 2 is still open**: the installer script runs unverified at build time. It is tracked under
+*Known gaps* below.
 
 ## Repository governance
 
@@ -229,21 +242,7 @@ still pushes and simply shows no Verified badge. And `allowed_signers` (one `<em
 <key>` line) is what makes *local* `git verify-tag` work; without it verification fails with
 `gpg.ssh.allowedSignersFile needs to be configured` even though the signature is perfectly good.
 
-Step 5 gains one line:
-
-```bash
-git tag -a v0.4.2 -m "v0.4.2"   # signed automatically via tag.gpgsign
-git verify-tag v0.4.2           # must report a good signature before pushing
-git push origin v0.4.2
-```
-
-After pushing, confirm GitHub agrees — a locally valid signature and a Verified badge are
-different claims:
-
-```bash
-gh api repos/makraz/ddev-claude/git/ref/tags/v0.4.2 -q '.object.sha' \
-  | xargs -I{} gh api repos/makraz/ddev-claude/git/tags/{} -q '.verification'
-```
+The verify-before-push and post-push checks are part of step 5 of the release procedure.
 
 ---
 
@@ -258,4 +257,5 @@ Recorded so they are chosen rather than forgotten:
 | Two integration tests depend on the public internet | `downloads.claude.ai` and `packages.sury.org` reachability. They flake under load and will flake in CI. |
 | Release notes written by hand | Fine at this cadence, drifts at higher cadence. |
 | No arm64 test | The image is multi-arch; only amd64 is tested. |
+| Installer script unverified | `install.sh` is `curl \| bash` at build time, baked into an image that runs with `NET_ADMIN` and `NET_RAW`. The binary it fetches is checksum-verified; the script is not. |
 | Tags through `v0.4.1` unsigned | Signing starts at the next tag; the released ones cannot be signed retroactively, since a released tag is never re-pushed. |

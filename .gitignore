@@ -9,4 +9,6 @@
 .claude/
 
 # Design records and maintainer playbooks — kept locally, deliberately untracked.
-/docs/
+# docs/agents/ is the exception: AGENTS.md points every agent tool at it.
+/docs/*
+!/docs/agents/

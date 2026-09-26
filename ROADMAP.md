@@ -39,7 +39,7 @@ also fixes the actual delivery problem — `ddev add-on get` never serves a pre-
 
 Two things belong here, and the first outranks everything else in this document.
 
-### Artifact integrity — done
+### Artifact integrity — done except the installer script
 
 Landed: the agent version is pinned via `ARG CLAUDE_VERSION` and the build fails if the installed
 version does not match; one resolved version feeds both architectures (previously each arch ran
@@ -47,14 +47,14 @@ the installer independently, so a mid-build upstream release could put two versi
 manifest while the OCI label described neither); and the build emits `provenance: mode=max` plus
 an SBOM.
 
-Also landed: **release tags are signed** from the next tag onward (SSH signing, `tag.gpgsign` on,
-verified end to end — good signature locally, `verified=true` from the GitHub API on a pushed
-tag); `main` is protected (required `addon-test` check, no force-push, no deletion,
-`enforce_admins` on); and the `v0.4.1` release notes record the resolved agent version and the
-built revision rather than leaving them in the OCI label alone.
+Also landed: release tags are signed from the next tag onward, `main` is protected, and the
+`v0.4.1` release notes record the resolved agent version and the built revision. The details,
+including why the tags through `v0.4.1` stay unsigned, live in `RELEASING.md` (*What was fixed*
+and *Repository governance*).
 
-Nothing remains here. The tags through `v0.4.1` stay unsigned — a released tag is never re-pushed,
-so they cannot be signed retroactively.
+Still open: the `install.sh` installer script runs unverified (`curl | bash`) at build time. The
+binary it fetches is checksum-verified; the script is not. Tracked in `RELEASING.md` under
+*Known gaps*.
 
 ### Close the test blind spot
 

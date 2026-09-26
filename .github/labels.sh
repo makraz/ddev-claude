@@ -20,6 +20,9 @@ LABELS=(
   # Status
   "needs-triage|ededed|Awaiting maintainer triage"
   "needs-repro|fbca04|Waiting on a reproduction (chased by the stale bot)"
+  "needs-info|fbca04|Waiting on the reporter for more information"
+  "ready-for-agent|c2e0c6|Fully specified; ready for an AFK agent"
+  "ready-for-human|bfd4f2|Fully specified; requires human implementation"
   "confirmed|0e8a16|Reproduced / accepted"
   "blocked|b60205|Blocked on something else"
   "wontfix|ffffff|This will not be worked on"
