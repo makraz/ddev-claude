@@ -6,6 +6,12 @@ All notable changes to this add-on are documented here. This project adheres to
 
 ## [Unreleased]
 
+## [v0.4.3] — 2026-11-23
+
+### Changed
+- Base image rebuilt with the current Claude Code release.
+- Documentation: the README no longer claims the agent cannot reach non-allow-listed hosts. It now states that ICMP echo is allowed to any host and DNS goes through recursive resolvers, matching `SECURITY.md`. The v0.2.0 changelog date is corrected to its actual release, 2026-06-03.
+
 ## [v0.4.2] — 2026-09-26
 
 ### Changed
