@@ -7,7 +7,7 @@
 
 ## Overview
 
-This add-on integrates [Claude Code](https://docs.claude.com/en/docs/claude-code/overview), Anthropic's AI coding CLI, into your [DDEV](https://ddev.com) project as a **sandboxed sidecar container**. Claude runs with `--dangerously-skip-permissions` (YOLO mode) safely contained behind an iptables + ipset + dnsmasq firewall, so an agent off the rails cannot reach hosts you have not allow-listed. Note what that does **not** cover: your project tree — including `.env` — is readable by the agent by design, and the firewall bounds *where* traffic goes, not *what* leaves through a destination you allowed. Read [SECURITY.md](SECURITY.md) before trusting the sandbox with secrets.
+This add-on integrates [Claude Code](https://docs.claude.com/en/docs/claude-code/overview), Anthropic's AI coding CLI, into your [DDEV](https://ddev.com) project as a **sandboxed sidecar container**. Claude runs with `--dangerously-skip-permissions` (YOLO mode) behind an iptables + ipset + dnsmasq firewall that rejects TCP and UDP to hosts you have not allow-listed. It is not airtight: ICMP echo is allowed to any host, and DNS queries go out through recursive resolvers, so both can still carry data to an arbitrary destination. Note what that does **not** cover: your project tree — including `.env` — is readable by the agent by design, and the firewall bounds *where* traffic goes, not *what* leaves through a destination you allowed. Read [SECURITY.md](SECURITY.md) before trusting the sandbox with secrets.
 
 The default sidecar is **minimum viable**: Claude Code + firewall on a pre-built `debian:bookworm-slim` base image. Project-specific tools (PHP, gh, Playwright, etc.) are opt-in via a small extras catalog or a Dockerfile escape hatch.
 
@@ -208,6 +208,8 @@ An outbound firewall (default-DROP policy) that allows only:
 - `github.com`, `api.github.com`
 - `anthropic.com`, `claude.ai`, `downloads.claude.ai` (the latter so `claude update` works)
 - The DDEV internal network (so the agent can reach `web`, `db`, sibling add-ons).
+- Port 53 to the configured DNS upstreams only (Docker's embedded resolver, the host gateway, `1.1.1.1`, `8.8.8.8`).
+- ICMP echo (ping) to **any** host — not restricted by destination.
 - Whatever each enabled extra contributes (`.domains` files) and your `.ddev/claude.yaml` adds via `extra_allowed_domains`.
 
 The image tag is pinned to the addon version 1:1. Installing `ddev-claude@<tag>` always pulls `ddev-claude-base:<tag>` — no floating `:latest`. The exact Claude Code build baked into a given image is recorded in the OCI label `io.makraz.ddev-claude.claude-version` and visible via `docker inspect`.
@@ -233,7 +235,7 @@ The firewall is activated **at container start** by `entrypoint.sh` (PID 1, runn
 1. **ipsets** — `allowed-ipv4` (hash:ip) and `allowed-net` (hash:net).
 2. **Initial DNS resolution** — `dig` resolves the default + extra domains, populating `allowed-ipv4`.
 3. **dnsmasq** — listens on `127.0.0.1`, upstreams to `127.0.0.11` (Docker's embedded DNS, so DDEV service names like `web`/`db` resolve), `1.1.1.1`, `8.8.8.8`. Each allow-listed domain is bound via `ipset=/<domain>/allowed-ipv4`, so future resolutions automatically extend the allow-list — handles CDN IP rotation.
-4. **iptables** — default policy DROP on INPUT/OUTPUT/FORWARD. ACCEPT only loopback, established/related, port 53 **to the configured DNS upstreams only**, the two ipsets, the host gateway, and inbound 80/443.
+4. **iptables** — default policy DROP on INPUT/OUTPUT/FORWARD. ACCEPT only loopback, established/related, port 53 **to the configured DNS upstreams only**, ICMP echo-request to any host, the two ipsets, the host gateway, and inbound 80/443.
 5. **IPv6** — dropped entirely via `ip6tables`. If `ip6tables` is unavailable but the container has an IPv6 default route, `init-firewall.sh` **fails loudly** rather than leave v6 egress unfiltered.
 6. **Smoke tests** — reachability checks for github (must succeed) and `example.com` (must fail).
 

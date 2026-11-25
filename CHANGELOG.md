@@ -6,10 +6,16 @@ All notable changes to this add-on are documented here. This project adheres to
 
 ## [Unreleased]
 
+## [v0.4.3] — 2026-11-23
+
+### Changed
+- Base image rebuilt with the current Claude Code release.
+- Documentation: the README no longer claims the agent cannot reach non-allow-listed hosts. It now states that ICMP echo is allowed to any host and DNS goes through recursive resolvers, matching `SECURITY.md`. The v0.2.0 changelog date is corrected to its actual release, 2026-06-03.
+
 ## [v0.4.2] — 2026-09-26
 
 ### Changed
-- Base image rebuilt with the current Claude Code release (see the release notes for the exact version).
+- Base image rebuilt with Claude Code 2.1.283.
 - Documentation: the release procedure now signs and verifies tags, and the still-open installer-script gap is listed under Known gaps.
 
 ## [v0.4.1] — 2026-08-31
@@ -228,7 +234,7 @@ multi-arch base image instead of building everything locally.
 ### Fixed
 - gitignore entries are written to the project root, not `.ddev/.gitignore`.
 
-## [v0.2.0] — 2026-05-19
+## [v0.2.0] — 2026-06-03
 
 Minimum-viable redesign (stable; promoted from `v0.2.0-beta.1`).
 
